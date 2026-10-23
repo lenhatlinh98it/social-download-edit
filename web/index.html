@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grabber</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="bg" aria-hidden="true">
+    <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
+    <div class="gridlines"></div>
+  </div>
+
+  <div class="app">
+    <header class="topbar glass">
+      <div class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.2H22l-6 4.6 2.3 7.2L12 16.6 5.7 21l2.3-7.2-6-4.6h7.6z"/></svg>
+        </div>
+        <div>
+          <div class="brand-name">Grabber</div>
+          <div class="brand-sub">Shorts &amp; Reels downloader</div>
+        </div>
+      </div>
+
+      <nav class="tabs" id="tabs">
+        <span class="tab-pill" id="tabPill"></span>
+        <button class="tab" data-view="youtube">
+          <svg viewBox="0 0 24 24"><path d="M21.6 7.2a2.5 2.5 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.5 2.5 0 0 0 2.4 7.2 26 26 0 0 0 2 12a26 26 0 0 0 .4 4.8 2.5 2.5 0 0 0 1.8 1.8C5.8 19 12 19 12 19s6.2 0 7.8-.4a2.5 2.5 0 0 0 1.8-1.8A26 26 0 0 0 22 12a26 26 0 0 0-.4-4.8zM10 15V9l5.2 3z"/></svg>
+          YouTube
+        </button>
+        <button class="tab" data-view="facebook">
+          <svg viewBox="0 0 24 24"><path d="M22 12a10 10 0 1 0-11.6 9.9v-7H7.9V12h2.5V9.8c0-2.5 1.5-3.9 3.8-3.9 1.1 0 2.2.2 2.2.2v2.5h-1.3c-1.2 0-1.6.8-1.6 1.6V12h2.8l-.4 2.9h-2.3v7A10 10 0 0 0 22 12z"/></svg>
+          Facebook
+        </button>
+        <button class="tab" data-view="douyin">
+          <svg viewBox="0 0 24 24"><path d="M16.6 3c.4 2.1 1.8 3.6 3.9 3.9v3.2c-1.5 0-2.9-.4-4-1.2v6.4a5.6 5.6 0 1 1-5.6-5.6c.3 0 .6 0 .9.1v3.2a2.5 2.5 0 1 0 1.6 2.3V3z"/></svg>
+          Douyin
+        </button>
+        <button class="tab" data-view="saved">
+          <svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>
+          Saved
+          <span class="tab-badge" id="savedCount">0</span>
+        </button>
+        <button class="tab" data-view="downloaded">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.8 2.8L16.5 9.5"/></svg>
+          Downloaded
+          <span class="tab-badge" id="historyCount">0</span>
+        </button>
+        <button class="tab" data-view="editor">
+          <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>
+          Editor
+        </button>
+      </nav>
+
+      <div class="sys">
+        <button class="engine-btn" id="engineBtn" title="Download engine (yt-dlp) — click to check for updates">
+          <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>
+          <span class="mono" id="engineText">yt-dlp</span>
+        </button>
+        <span class="sys-dot" id="sysDot"></span>
+        <span class="sys-text mono" id="sysText">READY</span>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="view" id="view-youtube"></section>
+      <section class="view" id="view-facebook"></section>
+      <section class="view" id="view-douyin"></section>
+
+      <section class="view" id="view-saved">
+        <form class="saved-form glass" id="savedForm" autocomplete="off">
+          <div class="field">
+            <label for="sTitle">Title</label>
+            <input id="sTitle" placeholder="My favourite channel">
+          </div>
+          <div class="field grow">
+            <label for="sLink">Link</label>
+            <input id="sLink" placeholder="YouTube channel, Facebook page or Douyin user URL">
+          </div>
+          <button class="btn primary" type="submit">
+            <svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>
+            Save
+          </button>
+        </form>
+        <div class="saved-head">
+          <h2>Saved sources</h2>
+          <span class="muted" id="savedHint">Open a source to fetch its videos again</span>
+        </div>
+        <div class="saved-list" id="savedList"></div>
+      </section>
+
+      <section class="view" id="view-downloaded">
+        <div class="history-bar glass">
+          <div class="seg" id="histFilter">
+            <button class="on" data-f="all">All</button>
+            <button data-f="youtube">YouTube</button>
+            <button data-f="facebook">Facebook</button>
+            <button data-f="douyin">Douyin</button>
+          </div>
+          <div class="hist-search">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <input id="histSearch" placeholder="Search downloaded videos by title or ID" spellcheck="false">
+          </div>
+          <span class="chip mono" id="histCountChip">0 videos</span>
+        </div>
+        <div class="hist-list" id="histList"></div>
+      </section>
+
+      <section class="view" id="view-editor" data-mode="edit">
+        <div class="ed-bar glass">
+          <div class="seg ed-modes" id="edModes">
+            <button data-m="edit" class="on">Edit</button><button data-m="batch">Batch</button><button data-m="merge">Merge</button>
+          </div>
+          <button class="btn primary sm edit-only" id="edOpen">
+            <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            Open video
+          </button>
+          <div class="ed-file edit-only">
+            <span class="ed-name" id="edName">No video loaded</span>
+            <span class="ed-meta mono" id="edMeta"></span>
+          </div>
+          <div class="ed-spacer"></div>
+          <div class="ed-history edit-only">
+            <button class="icon-btn" id="edUndo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+            <button class="icon-btn" id="edRedo" title="Redo (Ctrl+Y)"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+            <div class="kbd-wrap">
+              <button class="icon-btn" id="edKeys" title="Keyboard shortcuts"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
+              <div class="kbd-pop glass" id="kbdPop">
+                <div><kbd>Space</kbd> Play / pause</div>
+                <div><kbd>←</kbd><kbd>→</kbd> Step 1 frame · <kbd>Shift</kbd> 1 second</div>
+                <div><kbd>I</kbd> / <kbd>O</kbd> Set trim start / end</div>
+                <div><kbd>Ctrl</kbd><kbd>Z</kbd> Undo · <kbd>Ctrl</kbd><kbd>Y</kbd> Redo</div>
+                <div><kbd>R</kbd> Rotate right · <kbd>Shift</kbd><kbd>R</kbd> left</div>
+                <div><kbd>H</kbd> / <kbd>V</kbd> Flip horizontal / vertical</div>
+                <div><kbd>M</kbd> Mute original audio</div>
+                <div><kbd>C</kbd> (hold) Compare original colors</div>
+                <div><kbd>Ctrl</kbd><kbd>O</kbd> Open · <kbd>Ctrl</kbd><kbd>E</kbd> Export</div>
+                <div class="muted">Drop videos, music or a logo image anywhere on the window.</div>
+              </div>
+            </div>
+          </div>
+          <button class="btn ghost sm" id="edStripBatch" title="Pick several videos and remove their metadata in place (no re-encode, no quality loss)">
+            <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+            Remove metadata from files…
+          </button>
+        </div>
+
+        <div class="ed-body edit-only">
+          <div class="ed-stage glass">
+            <div class="ed-panes">
+              <div class="ed-pane">
+                <div class="ed-label">Source <span>· drag the frame to crop</span></div>
+                <div class="ed-canvas-wrap" id="srcWrap">
+                  <canvas id="srcCanvas"></canvas>
+                  <div class="crop-box" id="cropBox">
+                    <i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i><i data-h="e"></i>
+                    <i data-h="se"></i><i data-h="s"></i><i data-h="sw"></i><i data-h="w"></i>
+                  </div>
+                </div>
+              </div>
+              <div class="ed-pane">
+                <div class="ed-label">Output <span>· drag to move when zoomed</span> <b class="mono" id="outSize"></b></div>
+                <div class="ed-canvas-wrap" id="outWrap"><canvas id="outCanvas"></canvas></div>
+              </div>
+            </div>
+            <div class="ed-transport">
+              <button class="icon-btn" id="edPlay" title="Play / pause (Space)">
+                <svg viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></svg>
+              </button>
+              <span class="mono ed-time" id="edTime">0:00.0</span>
+              <div class="timeline" id="timeline">
+                <div class="tl-range" id="tlRange"></div>
+                <div class="tl-handle" id="tlStart" title="Trim start"></div>
+                <div class="tl-handle" id="tlEnd" title="Trim end"></div>
+                <div class="tl-head" id="tlHead"></div>
+              </div>
+              <span class="mono ed-time" id="edTrim">0:00 – 0:00</span>
+            </div>
+            <div class="ed-empty" id="edEmpty">
+              <div class="empty-orb"></div>
+              <div class="empty-title">Edit a video</div>
+              <div class="empty-sub">Open a file, or use the ✂ button on a video in the Downloaded tab.</div>
+            </div>
+            <video id="edVideo" playsinline preload="auto"></video>
+            <audio id="edMusic" preload="auto"></audio>
+          </div>
+
+          <aside class="ed-side glass" id="edSide">
+            <div class="ed-group">
+              <div class="ed-title">Presets</div>
+              <div class="preset-row">
+                <select id="presetSelect"><option value="">— saved presets —</option></select>
+                <button class="btn ghost sm" id="presetApply" title="Apply the selected preset to this video">Apply</button>
+                <button class="icon-btn" id="presetDelete" title="Delete the selected preset"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+              </div>
+              <div class="preset-row">
+                <input id="presetName" placeholder="Preset name" spellcheck="false">
+                <button class="btn ghost sm" id="presetSave" title="Save the current edit (crop, color, text, music…) as a preset">Save</button>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Aspect ratio</div>
+              <div class="chips" id="ratioChips">
+                <button data-r="original" class="on">Original</button><button data-r="free">Free</button>
+                <button data-r="9:16">9:16</button><button data-r="16:9">16:9</button><button data-r="1:1">1:1</button>
+                <button data-r="4:5">4:5</button><button data-r="4:3">4:3</button><button data-r="3:4">3:4</button>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Rotate &amp; flip</div>
+              <div class="chips">
+                <button id="rotL" title="Rotate left">↺ 90°</button><button id="rotR" title="Rotate right">↻ 90°</button>
+                <button id="flipH" title="Flip horizontally">⇋ Flip H</button><button id="flipV" title="Flip vertically">⇵ Flip V</button>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title"><span id="zoomLabel">Zoom</span> <span class="mono" id="zoomVal">100%</span></div>
+              <input type="range" id="zoom" min="50" max="300" step="1" value="100">
+              <label class="ed-check"><input type="checkbox" id="zoomAnim"> Animate zoom over the clip</label>
+              <div class="anim-row" id="animRow">
+                <div class="ed-title">End zoom <span class="mono" id="zoomEndVal">130%</span></div>
+                <input type="range" id="zoomEnd" min="50" max="300" step="1" value="130">
+                <label class="ed-check"><input type="checkbox" id="zoomEase" checked> Smooth start &amp; end</label>
+                <div class="ed-warn" id="zoomWarn">Start and end must both be above or both below 100%.</div>
+              </div>
+              <div class="ed-hint">Above 100% zooms in, below 100% shrinks the video inside the frame.</div>
+              <div class="bg-row" id="bgRow">
+                <span>Background</span>
+                <div class="chips" id="bgChips">
+                  <button data-bg="blur" class="on">Blur</button><button data-bg="black">Black</button><button data-bg="color">Color</button>
+                </div>
+                <input type="color" id="bgColor" value="#111827">
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Color</div>
+              <div class="chips" id="presetChips"></div>
+              <div class="sliders" id="colorSliders"></div>
+              <div class="ed-actions">
+                <button class="btn ghost sm" id="edCompare" title="Hold to see the original colors">Hold to compare</button>
+                <button class="btn ghost sm" id="colorReset">Reset color</button>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Text</div>
+              <textarea id="txtContent" rows="2" placeholder="Add a caption or watermark text…" spellcheck="false"></textarea>
+              <select id="txtFont"></select>
+              <div class="sliders">
+                <div class="slider-row"><span>Size</span><input type="range" id="txtSize" min="2" max="20" step="0.5" value="6"><b class="mono" id="txtSizeVal">6</b></div>
+                <div class="slider-row"><span>Opacity</span><input type="range" id="txtOpacity" min="5" max="100" step="5" value="100"><b class="mono" id="txtOpacityVal">100%</b></div>
+                <div class="slider-row"><span>Outline</span><input type="range" id="txtOutline" min="0" max="20" step="1" value="0"><b class="mono" id="txtOutlineVal">0</b></div>
+              </div>
+              <div class="color-row">
+                <label>Text <input type="color" id="txtColor" value="#ffffff"></label>
+                <label>Outline <input type="color" id="txtOutlineColor" value="#000000"></label>
+              </div>
+              <label class="ed-check"><input type="checkbox" id="txtBox"> Background box</label>
+              <div class="color-row box-row" id="txtBoxRow">
+                <label>Box <input type="color" id="txtBoxColor" value="#000000"></label>
+                <input type="range" id="txtBoxOpacity" min="0" max="100" step="5" value="50"><b class="mono" id="txtBoxOpacityVal">50%</b>
+              </div>
+              <div class="pos-row"><span>Position</span><div class="pos-grid" data-target="text"></div><span class="ed-hint">or drag it on the output</span></div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Logo</div>
+              <div class="music-box" id="logoBox">
+                <div class="music-head">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
+                  <span class="music-name" id="logoName">No logo</span>
+                  <button class="icon-btn" id="logoRemove" title="Remove logo"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+                </div>
+                <button class="btn ghost sm" id="logoAdd">Add logo (png, jpg, webp)</button>
+                <div class="music-ctl">
+                  <div class="sliders">
+                    <div class="slider-row"><span>Size</span><input type="range" id="logoSize" min="5" max="60" step="1" value="20"><b class="mono" id="logoSizeVal">20%</b></div>
+                    <div class="slider-row"><span>Opacity</span><input type="range" id="logoOpacity" min="5" max="100" step="5" value="100"><b class="mono" id="logoOpacityVal">100%</b></div>
+                  </div>
+                  <div class="pos-row"><span>Position</span><div class="pos-grid" data-target="logo"></div></div>
+                </div>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Speed <span class="mono" id="speedVal">1×</span></div>
+              <input type="range" id="speed" min="25" max="400" step="5" value="100">
+              <div class="chips" id="speedChips">
+                <button data-s="0.5">0.5×</button><button data-s="1" class="on">1×</button><button data-s="1.5">1.5×</button><button data-s="2">2×</button>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Audio &amp; fades</div>
+              <div class="sliders">
+                <div class="slider-row"><span>Original</span><input type="range" id="volume" min="0" max="200" step="5" value="100"><b class="mono" id="volumeVal">100%</b></div>
+              </div>
+              <label class="ed-check"><input type="checkbox" id="mute"> Mute original audio</label>
+              <div class="music-box" id="musicBox">
+                <div class="music-head">
+                  <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  <span class="music-name" id="musicName">No background music</span>
+                  <button class="icon-btn" id="musicRemove" title="Remove music">
+                    <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                  </button>
+                </div>
+                <button class="btn ghost sm" id="musicAdd">Add music (mp3, m4a, wav…)</button>
+                <div class="music-ctl" id="musicCtl">
+                  <div class="sliders">
+                    <div class="slider-row"><span>Music</span><input type="range" id="musicVol" min="0" max="200" step="5" value="100"><b class="mono" id="musicVolVal">100%</b></div>
+                    <div class="slider-row"><span>Start at</span><input type="range" id="musicOffset" min="0" max="1" step="0.5" value="0"><b class="mono" id="musicOffsetVal">0:00</b></div>
+                  </div>
+                  <label class="ed-check"><input type="checkbox" id="musicLoop" checked> Loop if shorter than the video</label>
+                </div>
+              </div>
+              <div class="sliders">
+                <div class="slider-row"><span>Fade in</span><input type="range" id="fadeIn" min="0" max="3" step="0.1" value="0"><b class="mono" id="fadeInVal">0s</b></div>
+                <div class="slider-row"><span>Fade out</span><input type="range" id="fadeOut" min="0" max="3" step="0.1" value="0"><b class="mono" id="fadeOutVal">0s</b></div>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Export</div>
+              <label class="ed-field">File name<input id="edOutName" spellcheck="false"></label>
+              <label class="ed-check"><input type="checkbox" id="edStrip" checked> Remove metadata (source, encoder, comments…)</label>
+              <div class="ed-encoder mono" id="edEncoder">Encoder: —</div>
+              <div class="track" id="edTrack"><div class="fill" id="edFill"></div></div>
+              <div class="ed-status" id="edStatus">Ready</div>
+              <div class="ed-actions">
+                <button class="btn primary" id="edExport">
+                  <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+                  Export MP4
+                </button>
+                <button class="btn danger hidden" id="edCancel">Cancel</button>
+              </div>
+              <button class="btn ghost sm" id="edStripOne" title="Rewrites this file in place without metadata — instant, no quality loss">Remove metadata only (no re-encode)</button>
+              <button class="btn ghost sm" id="edReset">Reset all edits</button>
+            </div>
+          </aside>
+        </div>
+
+        <div class="ed-body batch-only">
+          <div class="ed-stage glass list-stage">
+            <div class="list-head">
+              <b>Videos to process</b>
+              <span class="muted mono" id="batchCount">0 videos</span>
+              <div class="ed-spacer"></div>
+              <button class="btn ghost sm" id="batchAdd">Add videos…</button>
+              <button class="btn ghost sm" id="batchClear">Clear</button>
+            </div>
+            <div class="file-list" id="batchList"></div>
+          </div>
+          <aside class="ed-side glass">
+            <div class="ed-group">
+              <div class="ed-title">Preset to apply</div>
+              <select id="batchPreset"><option value="">— choose a saved preset —</option></select>
+              <div class="ed-hint">Create presets in the Edit tab (Presets → Save). The crop is adapted to each video.</div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Output</div>
+              <div class="chips" id="batchDirMode"><button data-d="same" class="on">Same folder as each video</button><button data-d="custom">Choose folder…</button></div>
+              <div class="ed-meta mono" id="batchDir"></div>
+              <label class="ed-field">Name suffix<input id="batchSuffix" value=" (edited)" spellcheck="false"></label>
+            </div>
+            <div class="ed-group">
+              <div class="track" id="batchTrack"><div class="fill" id="batchFill"></div></div>
+              <div class="ed-status" id="batchStatus">Ready</div>
+              <div class="ed-actions">
+                <button class="btn primary" id="batchStart">Start batch</button>
+                <button class="btn danger hidden" id="batchCancel">Cancel</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="ed-body merge-only">
+          <div class="ed-stage glass list-stage">
+            <div class="list-head">
+              <b>Clips (in order)</b>
+              <span class="muted mono" id="mergeCount">0 clips</span>
+              <div class="ed-spacer"></div>
+              <button class="btn ghost sm" id="mergeAdd">Add clips…</button>
+              <button class="btn ghost sm" id="mergeClear">Clear</button>
+            </div>
+            <div class="file-list" id="mergeList"></div>
+          </div>
+          <aside class="ed-side glass">
+            <div class="ed-group">
+              <div class="ed-title">Output size</div>
+              <div class="chips" id="mergeSize">
+                <button data-s="9:16" class="on">9:16 · 1080×1920</button><button data-s="16:9">16:9</button><button data-s="1:1">1:1</button>
+                <button data-s="4:5">4:5</button><button data-s="first">Same as first clip</button>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Fit clips that don't match</div>
+              <div class="chips" id="mergeFit"><button data-f="blur" class="on">Blur background</button><button data-f="black">Black bars</button><button data-f="crop">Crop to fill</button></div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Transition <span class="mono" id="mergeTransVal">Cut</span></div>
+              <input type="range" id="mergeTrans" min="0" max="1.5" step="0.1" value="0">
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Export</div>
+              <label class="ed-field">File name<input id="mergeName" value="merged" spellcheck="false"></label>
+              <label class="ed-check"><input type="checkbox" id="mergeStrip" checked> Remove metadata</label>
+              <div class="ed-meta mono" id="mergeTotal"></div>
+              <div class="track" id="mergeTrack"><div class="fill" id="mergeFill"></div></div>
+              <div class="ed-status" id="mergeStatus">Ready</div>
+              <div class="ed-actions">
+                <button class="btn primary" id="mergeStart">Merge clips</button>
+                <button class="btn danger hidden" id="mergeCancel">Cancel</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer class="dock glass" id="dock">
+      <button class="folder" id="folderBtn" title="Change download folder">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span class="folder-text">
+          <span class="folder-label">Save to</span>
+          <span class="folder-path mono" id="dirText"></span>
+        </span>
+      </button>
+      <button class="icon-btn" id="openDirBtn" title="Open folder">
+        <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>
+      </button>
+      <div class="progress">
+        <div class="progress-text">
+          <span id="statusText">Ready</span>
+          <span class="mono" id="pctText"></span>
+        </div>
+        <div class="track"><div class="fill" id="pfill"></div></div>
+      </div>
+      <button class="btn ghost lg" id="markBtn" title="Already have these videos? Add them to the downloaded list so they are hidden from now on">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.8 2.8L16.5 9.5"/></svg>
+        <span class="btn-label">Add to downloaded</span>
+      </button>
+      <button class="btn primary lg" id="dlBtn">
+        <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+        Download <span class="dl-count mono" id="dlCount">0</span>
+      </button>
+      <button class="btn danger lg hidden" id="cancelBtn">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        Cancel
+      </button>
+    </footer>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <filter id="edGrade" color-interpolation-filters="sRGB">
+      <feColorMatrix id="edMatrix" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/>
+      <feComponentTransfer>
+        <feFuncR class="edGamma" type="gamma" amplitude="1" exponent="1" offset="0"/>
+        <feFuncG class="edGamma" type="gamma" amplitude="1" exponent="1" offset="0"/>
+        <feFuncB class="edGamma" type="gamma" amplitude="1" exponent="1" offset="0"/>
+      </feComponentTransfer>
+    </filter>
+  </svg>
+
+  <template id="sourceTpl">
+    <div class="search glass">
+      <svg class="search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input class="url" spellcheck="false">
+      <button class="icon-btn save-link" title="Save this link">
+        <svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>
+      </button>
+      <button class="btn primary fetch">
+        <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>
+        Fetch
+      </button>
+    </div>
+    <div class="toolbar">
+      <div class="seg">
+        <button class="select-all">Select all</button>
+        <button class="clear">Clear</button>
+      </div>
+      <div class="fb-connect"></div>
+      <span class="chip mono count">0 / 0 selected</span>
+    </div>
+    <div class="grid-wrap">
+      <div class="grid"></div>
+      <div class="empty">
+        <div class="empty-orb"></div>
+        <div class="empty-title"></div>
+        <div class="empty-sub"></div>
+      </div>
+    </div>
+  </template>
+
+  <script src="app.js"></script>
+  <script src="editor.js"></script>
+  <script src="batch.js"></script>
+</body>
+</html>
