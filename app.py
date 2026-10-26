@@ -16,6 +16,7 @@ import douyin
 import editor
 import engine
 import facebook
+import instagram
 
 engine.activate()  # must run before yt_dlp is imported
 import yt_dlp  # noqa: E402
@@ -62,6 +63,8 @@ def detect_kind(url):
         return "facebook"
     if host.endswith("douyin.com") or host.endswith("iesdouyin.com"):
         return "douyin"
+    if host.endswith("instagram.com") or host == "instagr.am":
+        return "instagram"
     return None
 
 
@@ -70,6 +73,8 @@ def normalize_url(kind, url):
         return normalize_shorts_url(url)
     if kind == "douyin":
         return douyin.normalize_user_url(url)
+    if kind == "instagram":
+        return instagram.normalize_user_url(url)
     return facebook.normalize_reels_url(url)
 
 
@@ -152,6 +157,8 @@ def video_url(kind, video_id):
         return f"https://www.youtube.com/shorts/{video_id}"
     if kind == "douyin":
         return douyin.video_url(video_id)
+    if kind == "instagram":
+        return instagram.video_url(video_id)
     return f"https://www.facebook.com/reel/{video_id}"
 
 
@@ -211,7 +218,14 @@ def fetch_douyin(url, status):
     return videos, nickname, limited
 
 
-PLATFORM_NAMES = {"youtube": "YouTube", "facebook": "Facebook", "douyin": "Douyin"}
+def fetch_instagram(url, status):
+    reels, username, limited = instagram.fetch_user_reels(url, lambda n: status(f"Loading Instagram reels\u2026 found {n}"))
+    for v in reels:
+        v["views"] = compact_number(v["plays"])
+    return reels, username, limited
+
+
+PLATFORM_NAMES = {"youtube": "YouTube", "facebook": "Facebook", "douyin": "Douyin", "instagram": "Instagram"}
 
 
 class Api:
@@ -221,9 +235,9 @@ class Api:
         self._window = None
         self._busy = False
         self._lock = threading.Lock()
-        self._lists = {"youtube": [], "facebook": [], "douyin": []}
-        self._sources = {"youtube": "", "facebook": "", "douyin": ""}
-        self._gen = {"youtube": 0, "facebook": 0, "douyin": 0}
+        self._lists = {"youtube": [], "facebook": [], "douyin": [], "instagram": []}
+        self._sources = {"youtube": "", "facebook": "", "douyin": "", "instagram": ""}
+        self._gen = {"youtube": 0, "facebook": 0, "douyin": 0, "instagram": 0}
         self._caption_requested = set()
         self._meta_pool = ThreadPoolExecutor(max_workers=3)
         self._cancel = threading.Event()
@@ -271,6 +285,7 @@ class Api:
             "saved": load_saved(),
             "fbLoggedIn": facebook.is_logged_in(),
             "dyLoggedIn": douyin.is_logged_in(),
+            "igLoggedIn": instagram.is_logged_in(),
             "dir": load_settings().get("dir") or DEFAULT_DIR,
             "engine": yt_dlp.version.__version__,
         }
@@ -332,7 +347,10 @@ class Api:
             return {"ok": False, "error": "Connect your Facebook account first."}
         if kind == "douyin" and "/user/" not in url:
             return {"ok": False, "error": "Use a Douyin user link, e.g. https://www.douyin.com/user/MS4wLjABAAAA\u2026"}
-        worker = {"youtube": fetch_youtube, "facebook": fetch_facebook, "douyin": fetch_douyin}[kind]
+        if kind == "instagram" and not instagram.username_of(url):
+            return {"ok": False, "error": "Use an Instagram profile link, e.g. https://www.instagram.com/username/reels/"}
+        worker = {"youtube": fetch_youtube, "facebook": fetch_facebook, "douyin": fetch_douyin,
+                  "instagram": fetch_instagram}[kind]
         if not self._run(self._fetch_task, kind, url, worker):
             return {"ok": False, "error": "Another task is running."}
         return {"ok": True, "url": url}
@@ -349,6 +367,10 @@ class Api:
             self._emit("dyLoginRequired", message=str(ex), loggedIn=douyin.is_logged_in())
             self._emit("status", text=str(ex), progress=0)
             return
+        except instagram.LoginRequired as ex:
+            self._emit("igLoginRequired", message=str(ex), loggedIn=instagram.is_logged_in())
+            self._emit("status", text=str(ex), progress=0)
+            return
         done_ids = load_downloaded().get(kind, {})
         videos = [v for v in fetched if v["id"] not in done_ids]
         hidden = len(fetched) - len(videos)
@@ -358,6 +380,8 @@ class Api:
         limited = bool(extra and extra[0])
         if kind == "douyin":
             self._emit("dyLogin", loggedIn=douyin.is_logged_in())
+        if kind == "instagram":
+            self._emit("igLogin", loggedIn=instagram.is_logged_in())
         self._emit("list", kind=kind, gen=self._gen[kind], url=url, videos=videos, hidden=hidden,
                    source=source, folder=safe_name(source, fallback=kind), limited=limited)
         note = f" ({hidden} already downloaded, hidden)" if hidden else ""
@@ -365,8 +389,8 @@ class Api:
         self._notify("Fetch finished", f"{len(videos)} new videos from {source or url}")
 
     def load_captions(self, kind, indices):
-        """Facebook grids show no captions, so they are resolved lazily for visible cards."""
-        if kind != "facebook":
+        """Facebook and Instagram grids show no captions, so they are resolved lazily for visible cards."""
+        if kind not in ("facebook", "instagram"):
             return
         gen = self._gen[kind]
         videos = self._lists[kind]
@@ -375,9 +399,20 @@ class Api:
             if key in self._caption_requested or idx >= len(videos) or videos[idx]["title"]:
                 continue
             self._caption_requested.add(key)
-            self._meta_pool.submit(self._caption_job, gen, idx, videos[idx])
+            self._meta_pool.submit(self._caption_job, kind, gen, idx, videos[idx])
 
-    def _caption_job(self, gen, idx, video):
+    def _caption_job(self, kind, gen, idx, video):
+        if gen != self._gen[kind]:
+            return
+        if kind == "instagram":
+            try:
+                video["media"], caption = instagram.resolve(video["id"])
+            except Exception:  # noqa: BLE001 - keep the placeholder title
+                return
+            video["title"] = caption or f"reel_{video['id']}"
+            if gen == self._gen[kind]:
+                self._emit("caption", kind=kind, gen=gen, index=idx, title=video["title"])
+            return
         try:
             with facebook.cookie_copy() as cookies, yt_dlp.YoutubeDL(
                     {"cookiefile": cookies, "quiet": True, "no_warnings": True}) as ydl:
@@ -398,6 +433,15 @@ class Api:
         ok = facebook.login()
         self._emit("fbLogin", loggedIn=facebook.is_logged_in())
         self._emit("status", text="Facebook connected" if ok else "Facebook login cancelled", progress=0)
+
+    def ig_login(self):
+        return self._run(self._ig_login_task)
+
+    def _ig_login_task(self):
+        self._emit("status", text="Log in to Instagram in the opened browser window\u2026", progress=None)
+        ok = instagram.login()
+        self._emit("igLogin", loggedIn=instagram.is_logged_in())
+        self._emit("status", text="Instagram connected" if ok else "Instagram login cancelled", progress=0)
 
     def dy_login(self):
         return self._run(self._dy_login_task)
@@ -549,6 +593,21 @@ class Api:
                     name, _ = self._reserve_template(target_dir, title, f"douyin_{v['id']}")
                     file = douyin.download(v["media"], os.path.join(target_dir, name + ".mp4"), progress,
                                            self._cancel.is_set, yt_dlp.utils.DownloadCancelled)
+                elif kind == "instagram":
+                    if not v.get("media"):
+                        v["media"], caption = instagram.resolve(v["id"])
+                        v["title"] = v["title"] or caption
+                    title = v["title"] or f"reel_{v['id']}"
+                    name, _ = self._reserve_template(target_dir, title, f"reel_{v['id']}")
+                    path = os.path.join(target_dir, name + ".mp4")
+                    ffmpeg = self._tools()[0]
+                    try:
+                        file = instagram.download(v["media"], path, ffmpeg, progress, self._cancel.is_set,
+                                                  yt_dlp.utils.DownloadCancelled)
+                    except instagram.DownloadExpired:  # cached links went stale; read fresh ones
+                        v["media"], _ = instagram.resolve(v["id"])
+                        file = instagram.download(v["media"], path, ffmpeg, progress, self._cancel.is_set,
+                                                  yt_dlp.utils.DownloadCancelled)
                 else:
                     title = v["title"]
                     name, template = self._reserve_template(target_dir, title, v["id"])
@@ -593,7 +652,7 @@ class Api:
             return {"ok": False, "error": "Please enter both Title and Link."}
         kind = detect_kind(url)
         if not kind:
-            return {"ok": False, "error": "Only YouTube, Facebook and Douyin links are supported."}
+            return {"ok": False, "error": "Only YouTube, Facebook, Douyin and Instagram links are supported."}
         url = normalize_url(kind, url)
         items = load_saved()
         existing = next((it for it in items if it["url"] == url), None)
