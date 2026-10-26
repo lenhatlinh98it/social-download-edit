@@ -261,6 +261,36 @@ input:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 0 0 4px rgba(139,
 .manual-tag { flex: none; height: 18px; padding: 0 7px; border-radius: 9px; font-size: 10.5px; font-weight: 600; display: inline-flex; align-items: center;
   color: var(--muted); background: rgba(255,255,255,.07); border: 1px solid var(--stroke); }
 .hist-actions { display: flex; gap: 8px; flex: none; }
+.posted-tag { flex: none; height: 18px; padding: 0 7px; border-radius: 9px; font-size: 10.5px; font-weight: 600; display: inline-flex; align-items: center;
+  color: #ff7ab8; background: rgba(254,44,85,.12); border: 1px solid rgba(254,44,85,.3); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- TikTok posting ---------- */
+.tt-bar { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: var(--r-lg); }
+.tt-root { flex: 1; min-width: 0; }
+.tt-root label { display: block; font-size: 11.5px; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; margin-bottom: 4px; }
+.tt-root .mono { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-list { display: flex; flex-direction: column; gap: 8px; padding: 2px 4px; max-height: 42%; overflow-y: auto; }
+.tt-list.grow { flex: 1; min-height: 0; max-height: none; padding-bottom: 20px; }
+.tt-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 14px; background: var(--glass); border: 1px solid var(--stroke); }
+.tt-row .tt-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-row .tt-sub { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 8px; }
+.tt-row select { width: 150px; flex: none; }
+.tt-row .tt-err { color: var(--err); font-size: 12px; font-weight: 400; display: block; white-space: normal; margin-top: 2px; }
+.tt-empty { padding: 18px; text-align: center; color: var(--muted); border: 1px dashed var(--stroke); border-radius: 14px; }
+.tt-status { flex: none; height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; }
+.tt-status.posted { background: rgba(52,211,153,.14); color: var(--ok); }
+.tt-status.review { background: rgba(139,92,246,.18); color: #c4b5fd; }
+.tt-status.failed { background: rgba(251,113,133,.14); color: var(--err); }
+.modal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: rgba(4,4,16,.6); backdrop-filter: blur(4px); }
+.modal[hidden] { display: none; }
+.modal-card { width: min(520px, 100%); max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 22px; border-radius: var(--r-lg);
+  background: rgba(20, 20, 45, .92); animation: viewIn .25s var(--ease); }
+.modal-card h3 { margin: 0; font-size: 17px; }
+.modal-card .field { width: 100%; }
+.tt-file { font-size: 12px; color: var(--muted); word-break: break-all; }
+.tt-when { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
+.tt-when.off { display: none; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .hist-actions .icon-btn { width: 36px; height: 36px; border-radius: 11px; }
 .hist-empty { margin: auto; text-align: center; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .hist-empty b { color: var(--text); font-size: 16px; }
@@ -468,6 +498,9 @@ select:focus, textarea:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 
   .folder { max-width: 230px; }
 }
 
+@media (max-width: 1150px) {
+  .tab svg { display: none; }
+}
 @media (max-width: 1000px) {
   .brand-sub, .sys { display: none; }
   .brand { min-width: 0; }

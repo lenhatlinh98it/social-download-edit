@@ -13,6 +13,7 @@ const ICONS = {
   fb: '<svg viewBox="0 0 24 24"><path d="M22 12a10 10 0 1 0-11.6 9.9v-7H7.9V12h2.5V9.8c0-2.5 1.5-3.9 3.8-3.9 1.1 0 2.2.2 2.2.2v2.5h-1.3c-1.2 0-1.6.8-1.6 1.6V12h2.8l-.4 2.9h-2.3v7A10 10 0 0 0 22 12z"/></svg>',
   dy: '<svg viewBox="0 0 24 24"><path d="M16.6 3c.4 2.1 1.8 3.6 3.9 3.9v3.2c-1.5 0-2.9-.4-4-1.2v6.4a5.6 5.6 0 1 1-5.6-5.6c.3 0 .6 0 .9.1v3.2a2.5 2.5 0 1 0 1.6 2.3V3z"/></svg>',
   ig: '<svg viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.5 2h9A5.5 5.5 0 0 1 22 7.5v9a5.5 5.5 0 0 1-5.5 5.5h-9A5.5 5.5 0 0 1 2 16.5v-9A5.5 5.5 0 0 1 7.5 2zm0 2A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20h9a3.5 3.5 0 0 0 3.5-3.5v-9A3.5 3.5 0 0 0 16.5 4zM12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm5.3-3.3a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4z"/></svg>',
+  send: '<svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.4-7.5a1 1 0 0 0 0-1.8L3.4 3.6a.99.99 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>',
   heart: '<svg viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.6 1.1 5 2.9 1.4-1.8 3-2.9 5-2.9 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg>',
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
   open: '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
@@ -86,13 +87,14 @@ function setView(view) {
   state.view = view;
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${view}`));
-  $("#dock").classList.toggle("hidden", ["saved", "downloaded", "editor"].includes(view));
+  $("#dock").classList.toggle("hidden", ["saved", "downloaded", "tiktok", "editor"].includes(view));
   window.onEditorView?.(view === "editor");
   movePill();
   updateCounts();
   renderDir();
   if (LAZY_CAPTIONS.includes(view)) scheduleCaptions();
   if (view === "downloaded") loadHistory();
+  if (view === "tiktok") loadTT();
 }
 
 function movePill() {
@@ -497,9 +499,11 @@ function renderHistory() {
         <div class="hist-info">
           <div class="hist-title" title="${esc(it.title)}">${esc(it.title)}</div>
           <div class="hist-meta"><span class="pf-tag ${esc(it.kind)}">${icon}${name}</span>
-            <span class="mono">${esc(it.at)}</span><span class="mono">· ${esc(it.id)}</span>${it.manual ? '<span class="manual-tag">added manually</span>' : ""}</div>
+            <span class="mono">${esc(it.at)}</span><span class="mono">· ${esc(it.id)}</span>${it.manual ? '<span class="manual-tag">added manually</span>' : ""}${
+              it.posts?.length ? `<span class="posted-tag" title="${esc(it.posts.join("\n"))}">TikTok: ${esc(it.posts.join(", "))}</span>` : ""}</div>
         </div>
         <div class="hist-actions">
+          <button class="icon-btn h-tt" title="${it.fileExists ? "Post to TikTok" : "File not found"}" ${it.fileExists ? "" : "disabled"}>${ICONS.send}</button>
           <button class="icon-btn h-edit" title="${it.fileExists ? "Edit in the Editor" : "File not found"}" ${it.fileExists ? "" : "disabled"}>${ICONS.scissors}</button>
           <button class="icon-btn h-open" title="Open on ${name}">${ICONS.external}</button>
           <button class="icon-btn h-file" title="${it.fileExists ? "Show file in folder" : it.manual ? "No file (added manually)" : "File not found"}" ${it.fileExists ? "" : "disabled"}>${ICONS.folder}</button>
@@ -519,6 +523,7 @@ $("#histList").addEventListener("click", async (e) => {
   if (e.target.closest(".h-open")) api.open_url(it.url);
   else if (e.target.closest(".h-file")) api.reveal_file(it.file);
   else if (e.target.closest(".h-edit")) window.openInEditor(it.file);
+  else if (e.target.closest(".h-tt")) openPostDialog(it.file, it.title);
   else if (e.target.closest(".h-del")) {
     const btn = e.target.closest(".h-del");
     if (!btn.classList.contains("confirm")) {
@@ -544,6 +549,131 @@ $("#histFilter").addEventListener("click", (e) => {
 $("#histSearch").addEventListener("input", (e) => {
   state.histQuery = e.target.value;
   renderHistory();
+});
+
+/* ---------- TikTok posting ---------- */
+const tt = { root: "", profiles: [], posts: [], countries: [], file: "", lastProfile: "" };
+const pad2 = (n) => String(n).padStart(2, "0");
+
+async function loadTT() {
+  if (!api) return;
+  Object.assign(tt, await api.tt_state());
+  renderTT();
+}
+
+function renderTT() {
+  $("#ttRoot").textContent = tt.root || "Not set — choose your GoogleChromePortable folder";
+  $("#ttRoot").title = tt.root;
+  const box = $("#ttProfiles");
+  if (tt.error) box.innerHTML = `<div class="tt-empty">${esc(tt.error)}</div>`;
+  else if (!tt.profiles.length) box.innerHTML = '<div class="tt-empty">Choose the GoogleChromePortable folder to list its profiles.</div>';
+  else {
+    box.innerHTML = tt.profiles.map((p) => `<div class="tt-row" data-dir="${esc(p.dir)}">
+      <div class="tt-name">${esc(p.name)}<span class="tt-sub mono">${esc(p.dir)}</span></div>
+      <select title="Country the VPN of this profile should show before posting">
+        <option value="">No VPN check</option>
+        ${tt.countries.map((c) => `<option value="${c}" ${c === p.country ? "selected" : ""}>VPN: ${c}${c === p.auto ? " (from name)" : ""}</option>`).join("")}
+      </select>
+    </div>`).join("");
+  }
+  const posts = $("#ttPosts");
+  posts.innerHTML = tt.posts.length ? tt.posts.map((r) => {
+    const label = { posted: r.when ? "Scheduled" : "Posted", review: "Review", failed: "Failed" }[r.status] || r.status;
+    const file = r.file.split(/[\\/]/).pop();
+    return `<div class="tt-row">
+      <span class="tt-status ${esc(r.status)}">${esc(label)}</span>
+      <div class="tt-name" title="${esc(r.caption)}">${esc(r.profileName)}<span class="tt-sub">${esc(file)}</span>${r.error ? `<span class="tt-err">${esc(r.error)}</span>` : ""}</div>
+      <span class="mono tt-sub">${esc(r.when ? `for ${r.when}` : r.at)}</span>
+    </div>`;
+  }).join("") : '<div class="tt-empty">Nothing posted yet — use the ✈ button on a video in the Downloaded tab.</div>';
+}
+
+function fillWhen() {
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  start.setMinutes(Math.ceil(start.getMinutes() / 5) * 5, 0, 0);
+  const days = [];
+  for (let i = 0; i <= 30; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    const value = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const name = i === 0 ? "Today" : i === 1 ? "Tomorrow" : d.toLocaleDateString("en-GB", { weekday: "short" });
+    days.push(`<option value="${value}">${name} · ${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}</option>`);
+  }
+  $("#ttDate").innerHTML = days.join("");
+  $("#ttDate").value = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}`;
+  $("#ttHour").innerHTML = Array.from({ length: 24 }, (_, h) => `<option>${pad2(h)}</option>`).join("");
+  $("#ttMin").innerHTML = Array.from({ length: 12 }, (_, m) => `<option>${pad2(m * 5)}</option>`).join("");
+  $("#ttHour").value = pad2(start.getHours());
+  $("#ttMin").value = pad2(start.getMinutes());
+}
+
+async function openPostDialog(file, title) {
+  await loadTT();
+  if (!tt.profiles.length) {
+    toast("error", "No Chrome profiles yet", "Choose your Chrome Portable folder in the TikTok tab first.",
+      { label: "Open TikTok tab", run: () => setView("tiktok") });
+    return;
+  }
+  tt.file = file;
+  $("#ttFile").textContent = file;
+  $("#ttProfile").innerHTML = tt.profiles.map((p) =>
+    `<option value="${esc(p.dir)}">${esc(p.name)}${p.country ? ` — VPN ${p.country}` : ""}</option>`).join("");
+  if (tt.profiles.some((p) => p.dir === tt.lastProfile)) $("#ttProfile").value = tt.lastProfile;
+  $("#ttCaption").value = title || "";
+  $("#ttSchedule").checked = false;
+  $("#ttWhen").classList.add("off");
+  $("#ttReview").checked = false;
+  fillWhen();
+  syncPostButton();
+  $("#ttModal").hidden = false;
+  $("#ttCaption").focus();
+}
+
+function closePostDialog() { $("#ttModal").hidden = true; }
+
+function syncPostButton() {
+  $("#ttSubmit").textContent = $("#ttReview").checked ? "Fill in" : $("#ttSchedule").checked ? "Schedule" : "Post now";
+}
+
+$("#ttSchedule").addEventListener("change", () => {
+  $("#ttWhen").classList.toggle("off", !$("#ttSchedule").checked);
+  syncPostButton();
+});
+$("#ttReview").addEventListener("change", syncPostButton);
+$("#ttCancel").addEventListener("click", closePostDialog);
+$("#ttModal").addEventListener("mousedown", (e) => { if (e.target.id === "ttModal") closePostDialog(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#ttModal").hidden) closePostDialog(); });
+$("#ttForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const req = {
+    file: tt.file,
+    profile: $("#ttProfile").value,
+    caption: $("#ttCaption").value,
+    schedule: $("#ttSchedule").checked ? `${$("#ttDate").value}T${$("#ttHour").value}:${$("#ttMin").value}` : "",
+    review: $("#ttReview").checked,
+  };
+  const res = await api.tt_post(req);
+  if (!res.ok) { toast("error", "Cannot post", res.error); return; }
+  tt.lastProfile = req.profile;
+  closePostDialog();
+  const name = $("#ttProfile").selectedOptions[0]?.textContent || "";
+  toast("info", "Posting to TikTok…", `${name} — follow the progress in the status bar.`);
+});
+$("#ttChoose").addEventListener("click", async () => {
+  const res = await api.tt_choose_root();
+  if (!res) return;
+  if (res.error) { toast("error", "Not a Chrome Portable folder", res.error); return; }
+  Object.assign(tt, res);
+  renderTT();
+  toast("success", `Found ${tt.profiles.length} Chrome profiles`, tt.root);
+});
+$("#ttRefresh").addEventListener("click", loadTT);
+$("#ttProfiles").addEventListener("change", async (e) => {
+  const row = e.target.closest(".tt-row");
+  if (!row) return;
+  await api.tt_set_country(row.dataset.dir, e.target.value);
+  const p = tt.profiles.find((x) => x.dir === row.dataset.dir);
+  if (p) p.country = e.target.value;
 });
 
 /* ---------- events from Python ---------- */
@@ -651,6 +781,15 @@ const handlers = {
     badge.textContent = { done: "✓ Saved", failed: "Failed", cancelled: "Cancelled" }[e.state] || `${e.pct}%`;
     bar.classList.toggle("on", e.state === "downloading");
     $("i", bar).style.width = `${e.pct}%`;
+  },
+  ttPosted: (e) => {
+    const r = e.record;
+    const action = { label: "Open TikTok tab", run: () => setView("tiktok") };
+    if (r.status === "failed") toast("error", `Posting to ${r.profileName} failed`, r.error, action);
+    else if (r.status === "review") toast("info", `Ready in ${r.profileName}`, "Check the Chrome window and press Post yourself.");
+    else toast("success", r.when ? `Scheduled on ${r.profileName}` : `Posted to ${r.profileName}`, r.when ? `Goes live ${r.when}` : r.caption);
+    loadHistory();
+    if (state.view === "tiktok") loadTT();
   },
   done: (e) => {
     loadHistory();
