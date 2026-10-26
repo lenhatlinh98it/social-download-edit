@@ -55,6 +55,10 @@
           Downloaded
           <span class="tab-badge" id="historyCount">0</span>
         </button>
+        <button class="tab" data-view="tiktok">
+          <svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.4-7.5a1 1 0 0 0 0-1.8L3.4 3.6a.99.99 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>
+          TikTok
+        </button>
         <button class="tab" data-view="editor">
           <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>
           Editor
@@ -115,6 +119,27 @@
           <span class="chip mono" id="histCountChip">0 videos</span>
         </div>
         <div class="hist-list" id="histList"></div>
+      </section>
+
+      <section class="view" id="view-tiktok">
+        <div class="tt-bar glass">
+          <div class="tt-root">
+            <label>Chrome Portable folder</label>
+            <div class="mono" id="ttRoot">Not set — choose your GoogleChromePortable folder</div>
+          </div>
+          <button class="btn ghost sm" id="ttRefresh">Refresh</button>
+          <button class="btn primary sm" id="ttChoose">Choose folder</button>
+        </div>
+        <div class="saved-head">
+          <h2>Profiles</h2>
+          <span class="muted">Each profile posts with its own TikTok login and VPN. Grabber waits until the VPN shows the country set here.</span>
+        </div>
+        <div class="tt-list" id="ttProfiles"></div>
+        <div class="saved-head">
+          <h2>Recent posts</h2>
+          <span class="muted">Close every Chrome Portable window before the first post — Grabber reopens it with remote control on.</span>
+        </div>
+        <div class="tt-list grow" id="ttPosts"></div>
       </section>
 
       <section class="view" id="view-editor" data-mode="edit">
@@ -498,6 +523,32 @@
       </div>
     </div>
   </template>
+
+  <div class="modal" id="ttModal" hidden>
+    <form class="modal-card glass" id="ttForm" autocomplete="off">
+      <h3>Post to TikTok</h3>
+      <div class="tt-file mono" id="ttFile"></div>
+      <div class="field grow">
+        <label for="ttProfile">Profile</label>
+        <select id="ttProfile"></select>
+      </div>
+      <div class="field grow">
+        <label for="ttCaption">Title / caption</label>
+        <textarea id="ttCaption" rows="4" maxlength="4000" spellcheck="false" placeholder="Caption, #hashtags…"></textarea>
+      </div>
+      <label class="ed-check"><input type="checkbox" id="ttSchedule"> Schedule</label>
+      <div class="tt-when" id="ttWhen">
+        <select id="ttDate" aria-label="Day"></select>
+        <select id="ttHour" aria-label="Hour"></select>
+        <select id="ttMin" aria-label="Minute"></select>
+      </div>
+      <label class="ed-check"><input type="checkbox" id="ttReview"> Stop before Post — I'll check it in Chrome and press Post myself</label>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="ttCancel">Cancel</button>
+        <button type="submit" class="btn primary" id="ttSubmit">Post</button>
+      </div>
+    </form>
+  </div>
 
   <script src="app.js"></script>
   <script src="editor.js"></script>

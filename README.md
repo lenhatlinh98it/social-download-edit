@@ -23,6 +23,18 @@ Filenames follow the video title or caption. Videos already downloaded (or marke
 - Drag-and-drop video, music, or a logo image onto the window.
 - When the app is minimized, finished downloads and exports show a Windows toast.
 
+## Post to TikTok
+
+Post a downloaded video to one of your TikTok channels, each logged in inside its own profile of **Google Chrome Portable** (with its own VPN extension).
+
+1. Open the **TikTok** tab and choose your `GoogleChromePortable` folder — its profiles are listed (from `Data\profile\Local State`).
+2. For each profile, set the country its VPN must show (guessed from names like `TT-JP-Leather`), or *No VPN check*.
+3. In **Downloaded**, press the ✈ button on a video: pick the profile, edit the caption, optionally **Schedule** (today up to 30 days ahead, 5-minute steps, at least 15 minutes from now) and post.
+
+Grabber starts Chrome Portable with a local remote-debugging port, opens the profile, waits until the exit IP is in the chosen country, then fills TikTok Studio's upload page and presses Post (or stops before Post if *Stop before Post* is ticked). Chrome stays open for the next post. **Close every Chrome Portable window before the first post** — a Chrome started without the debugging port cannot be controlled. Posts are logged in `tiktok_posts.json`.
+
+Automating uploads may be against TikTok's terms; you are responsible for the accounts you use.
+
 ## Install (new machine)
 
 1. Clone this repository.
@@ -41,7 +53,7 @@ Re-run `setup.bat` anytime to repair or update.
 
 Stored under `%USERPROFILE%\.yt-shorts-downloader\` (not in this repo):
 
-`settings.json`, `saved.json`, `downloaded.json`, Facebook / Douyin / Instagram login sessions, and the in-app yt-dlp engine update.
+`settings.json`, `saved.json`, `downloaded.json`, `tiktok_posts.json`, Facebook / Douyin / Instagram login sessions, and the in-app yt-dlp engine update.
 
 ## Build a `.exe` (optional)
 
@@ -64,6 +76,7 @@ Output is `dist\Grabber\` (includes ffmpeg if `bin\` is present). The Desktop sh
 | `editor.py` | ffmpeg pipeline (crop, color, text/logo, music, presets, merge) |
 | `web/` | UI (`editor.js` = Edit, `batch.js` = Batch/Merge) |
 | `facebook.py` / `douyin.py` / `instagram.py` | Listing videos with Playwright |
+| `tiktok.py` | Posting through Chrome Portable profiles (CDP) |
 | `engine.py` | Update yt-dlp from PyPI from inside the app |
 | `build.py` | Package the `.exe` with PyInstaller |
 | `tools/make_icon.py` | Regenerate the icon (needs Pillow) |

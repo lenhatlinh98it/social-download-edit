@@ -1,5 +1,6 @@
 """Shorts / Reels downloader - pywebview desktop app (HTML/CSS UI) on top of yt-dlp + Playwright."""
 import ctypes
+import datetime
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import editor
 import engine
 import facebook
 import instagram
+import tiktok
 
 engine.activate()  # must run before yt_dlp is imported
 import yt_dlp  # noqa: E402
@@ -33,6 +35,7 @@ SAVED_FILE = os.path.join(facebook.DATA_DIR, "saved.json")
 DOWNLOADED_FILE = os.path.join(facebook.DATA_DIR, "downloaded.json")
 SETTINGS_FILE = os.path.join(facebook.DATA_DIR, "settings.json")
 PRESETS_FILE = os.path.join(facebook.DATA_DIR, "edit_presets.json")
+TT_POSTS_FILE = os.path.join(facebook.DATA_DIR, "tiktok_posts.json")
 DROP_KINDS = {**dict.fromkeys((".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"), "video"),
               **dict.fromkeys((".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"), "audio"),
               **dict.fromkeys((".png", ".jpg", ".jpeg", ".webp"), "image")}
@@ -673,6 +676,9 @@ class Api:
 
     # ---------- download history ----------
     def history_list(self):
+        posts = {}
+        for rec in _read_json(TT_POSTS_FILE, []):
+            posts.setdefault(os.path.normcase(rec["file"]), []).append(rec)
         items = []
         for kind, entries in load_downloaded().items():
             for vid, rec in entries.items():
@@ -687,6 +693,8 @@ class Api:
                     "file": file,
                     "fileExists": bool(file) and os.path.isfile(file),
                     "manual": bool(rec.get("manual")),
+                    "posts": [f"{x['profileName']} ({x['when'] or x['at']})" for x in posts.get(os.path.normcase(file), [])
+                              if x["status"] == "posted"] if file else [],
                 })
         items.sort(key=lambda it: it["at"], reverse=True)
         return items
@@ -705,6 +713,81 @@ class Api:
     def reveal_file(self, path):
         if path and os.path.isfile(path):
             subprocess.Popen(["explorer", f"/select,{os.path.normpath(path)}"])
+
+    # ---------- TikTok posting (Chrome Portable profiles) ----------
+    def tt_state(self):
+        settings = load_settings()
+        root = settings.get("ttChromeRoot") or ""
+        countries = settings.get("ttCountries") or {}
+        state = {"root": root, "profiles": [], "error": "", "posts": _read_json(TT_POSTS_FILE, [])[-50:][::-1]}
+        if root:
+            try:
+                state["profiles"] = [{**pr, "auto": pr["country"], "country": countries.get(pr["dir"], pr["country"])}
+                                     for pr in tiktok.list_profiles(root)]
+            except (tiktok.PostError, OSError, ValueError) as ex:
+                state["error"] = str(ex)
+        state["countries"] = tiktok.COUNTRIES
+        return state
+
+    def tt_choose_root(self):
+        current = load_settings().get("ttChromeRoot") or os.path.join(os.path.expanduser("~"), "Desktop")
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory=current)
+        if not result:
+            return None
+        try:
+            tiktok.chrome_paths(result[0])
+        except tiktok.PostError as ex:
+            return {"error": str(ex)}
+        save_setting("ttChromeRoot", result[0])
+        return self.tt_state()
+
+    def tt_set_country(self, profile_dir, country):
+        countries = load_settings().get("ttCountries") or {}
+        countries[profile_dir] = country or ""
+        save_setting("ttCountries", countries)
+        return True
+
+    def tt_post(self, req):
+        root = load_settings().get("ttChromeRoot") or ""
+        file = (req or {}).get("file") or ""
+        if not root:
+            return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first."}
+        if not os.path.isfile(file):
+            return {"ok": False, "error": "The video file no longer exists."}
+        profile = next((pr for pr in self.tt_state()["profiles"] if pr["dir"] == req.get("profile")), None)
+        if not profile:
+            return {"ok": False, "error": "Choose a Chrome profile."}
+        when = None
+        if req.get("schedule"):
+            when = datetime.datetime.strptime(req["schedule"], "%Y-%m-%dT%H:%M")
+            if when < datetime.datetime.now() + datetime.timedelta(minutes=15):
+                return {"ok": False, "error": "Schedule at least 15 minutes from now."}
+        if not self._run(self._tt_post_task, root, profile, file, (req.get("caption") or "").strip(), when,
+                         bool(req.get("review"))):
+            return {"ok": False, "error": "Another task is running."}
+        return {"ok": True}
+
+    def _tt_post_task(self, root, profile, file, caption, when, review):
+        name = profile["name"]
+        record = {"file": file, "profile": profile["dir"], "profileName": name, "caption": caption,
+                  "at": time.strftime("%Y-%m-%d %H:%M"), "when": when.strftime("%Y-%m-%d %H:%M") if when else "",
+                  "status": "", "error": ""}
+        try:
+            country = tiktok.post(root, profile["dir"], file, caption, when, profile["country"], review,
+                                  lambda text: self._emit("status", text=f"{name}: {text}", progress=None))
+            record["status"] = "review" if review else "posted"
+            record["country"] = country
+        except (tiktok.PostError, tiktok.ChromeBusy) as ex:
+            record["status"], record["error"] = "failed", str(ex)
+        except Exception as ex:  # noqa: BLE001 - Playwright / network errors: report and keep the app alive
+            record["status"], record["error"] = "failed", f"{type(ex).__name__}: {ex}"
+        posts = _read_json(TT_POSTS_FILE, [])
+        posts.append(record)
+        _write_json(TT_POSTS_FILE, posts[-500:])
+        done = {"posted": "Scheduled on" if when else "Posted to", "review": "Ready for review in"}.get(record["status"])
+        self._emit("status", text=f"{done} {name}" if done else f"Posting to {name} failed", progress=0)
+        self._emit("ttPosted", record=record)
+        self._notify("TikTok", f"{done} {name}" if done else f"Posting to {name} failed")
 
     # ---------- editor ----------
     @staticmethod
