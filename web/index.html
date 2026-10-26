@@ -41,6 +41,10 @@
           <svg viewBox="0 0 24 24"><path d="M16.6 3c.4 2.1 1.8 3.6 3.9 3.9v3.2c-1.5 0-2.9-.4-4-1.2v6.4a5.6 5.6 0 1 1-5.6-5.6c.3 0 .6 0 .9.1v3.2a2.5 2.5 0 1 0 1.6 2.3V3z"/></svg>
           Douyin
         </button>
+        <button class="tab" data-view="instagram">
+          <svg viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.5 2h9A5.5 5.5 0 0 1 22 7.5v9a5.5 5.5 0 0 1-5.5 5.5h-9A5.5 5.5 0 0 1 2 16.5v-9A5.5 5.5 0 0 1 7.5 2zm0 2A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20h9a3.5 3.5 0 0 0 3.5-3.5v-9A3.5 3.5 0 0 0 16.5 4zM12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm5.3-3.3a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4z"/></svg>
+          Instagram
+        </button>
         <button class="tab" data-view="saved">
           <svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>
           Saved
@@ -71,6 +75,7 @@
       <section class="view" id="view-youtube"></section>
       <section class="view" id="view-facebook"></section>
       <section class="view" id="view-douyin"></section>
+      <section class="view" id="view-instagram"></section>
 
       <section class="view" id="view-saved">
         <form class="saved-form glass" id="savedForm" autocomplete="off">
@@ -80,7 +85,7 @@
           </div>
           <div class="field grow">
             <label for="sLink">Link</label>
-            <input id="sLink" placeholder="YouTube channel, Facebook page or Douyin user URL">
+            <input id="sLink" placeholder="YouTube channel, Facebook page, Douyin or Instagram profile URL">
           </div>
           <button class="btn primary" type="submit">
             <svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>
@@ -101,6 +106,7 @@
             <button data-f="youtube">YouTube</button>
             <button data-f="facebook">Facebook</button>
             <button data-f="douyin">Douyin</button>
+            <button data-f="instagram">Instagram</button>
           </div>
           <div class="hist-search">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>

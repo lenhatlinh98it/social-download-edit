@@ -1,6 +1,6 @@
 # Grabber
 
-Windows desktop app for listing and batch-downloading short-form video from YouTube, Facebook, and Douyin, plus a built-in editor for crop, color, text, music, batch presets, and merge.
+Windows desktop app for listing and batch-downloading short-form video from YouTube, Facebook, Douyin, and Instagram, plus a built-in editor for crop, color, text, music, batch presets, and merge.
 
 Requires **Windows 10/11 (64-bit)** and an internet connection.
 
@@ -11,6 +11,7 @@ Requires **Windows 10/11 (64-bit)** and an internet connection.
 | **YouTube Shorts** | Channel URL, e.g. `https://www.youtube.com/@channel/shorts` | Uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) |
 | **Facebook Reels** | Page URL, e.g. `https://www.facebook.com/page/reels` | Sign in to Facebook inside the app |
 | **Douyin** | User URL, e.g. `https://www.douyin.com/user/MS4wLjABAAAA...` | Guests see ~20 latest videos; sign in for the full list |
+| **Instagram Reels** | Profile URL, e.g. `https://www.instagram.com/username/reels/` | Guests see ~12 latest reels; sign in for the full list. Saved in 1080p when available |
 
 Filenames follow the video title or caption. Videos already downloaded (or marked **Add to downloaded**) are hidden on the next fetch.
 
@@ -28,7 +29,7 @@ Filenames follow the video title or caption. Videos already downloaded (or marke
 2. Double-click **`setup.bat`**. It will:
    - install Python 3.12 via winget if Python 3.10–3.13 is missing
    - create `.venv` and install `requirements.txt`
-   - install Chromium for Facebook / Douyin
+   - install Chromium for Facebook / Douyin / Instagram
    - download a portable ffmpeg (LGPL) into `bin\`
    - install the Microsoft Edge WebView2 runtime if needed
    - create a **Grabber** shortcut on the Desktop
@@ -40,7 +41,7 @@ Re-run `setup.bat` anytime to repair or update.
 
 Stored under `%USERPROFILE%\.yt-shorts-downloader\` (not in this repo):
 
-`settings.json`, `saved.json`, `downloaded.json`, Facebook / Douyin login sessions, and the in-app yt-dlp engine update.
+`settings.json`, `saved.json`, `downloaded.json`, Facebook / Douyin / Instagram login sessions, and the in-app yt-dlp engine update.
 
 ## Build a `.exe` (optional)
 
@@ -62,11 +63,11 @@ Output is `dist\Grabber\` (includes ffmpeg if `bin\` is present). The Desktop sh
 | `app.py` | Backend and pywebview window |
 | `editor.py` | ffmpeg pipeline (crop, color, text/logo, music, presets, merge) |
 | `web/` | UI (`editor.js` = Edit, `batch.js` = Batch/Merge) |
-| `facebook.py` / `douyin.py` | Listing videos with Playwright |
+| `facebook.py` / `douyin.py` / `instagram.py` | Listing videos with Playwright |
 | `engine.py` | Update yt-dlp from PyPI from inside the app |
 | `build.py` | Package the `.exe` with PyInstaller |
 | `tools/make_icon.py` | Regenerate the icon (needs Pillow) |
 
 ## Disclaimer
 
-Use this tool only with content you own or have permission to download. Respect YouTube, Facebook, and Douyin terms of service and applicable copyright law. This project is provided as-is for personal use.
+Use this tool only with content you own or have permission to download. Respect YouTube, Facebook, Douyin, and Instagram terms of service and applicable copyright law. This project is provided as-is for personal use.

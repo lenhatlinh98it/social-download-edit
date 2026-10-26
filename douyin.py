@@ -202,9 +202,9 @@ def fetch_user_videos(url, on_progress=None, max_idle_rounds=4):
     return videos, nickname, limited
 
 
-def download(media_url, path, on_progress=None, should_cancel=None, cancelled_exc=Exception):
+def download(media_url, path, on_progress=None, should_cancel=None, cancelled_exc=Exception, referer=REFERER):
     """Stream an MP4 to `path` (via `path.part`)."""
-    req = urllib.request.Request(media_url, headers={"User-Agent": USER_AGENT, "Referer": REFERER})
+    req = urllib.request.Request(media_url, headers={"User-Agent": USER_AGENT, "Referer": referer})
     part = path + ".part"
     try:
         resp = urllib.request.urlopen(req, timeout=60)

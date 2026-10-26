@@ -12,6 +12,7 @@ const ICONS = {
   yt: '<svg viewBox="0 0 24 24"><path d="M21.6 7.2a2.5 2.5 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.5 2.5 0 0 0 2.4 7.2 26 26 0 0 0 2 12a26 26 0 0 0 .4 4.8 2.5 2.5 0 0 0 1.8 1.8C5.8 19 12 19 12 19s6.2 0 7.8-.4a2.5 2.5 0 0 0 1.8-1.8A26 26 0 0 0 22 12a26 26 0 0 0-.4-4.8zM10 15V9l5.2 3z"/></svg>',
   fb: '<svg viewBox="0 0 24 24"><path d="M22 12a10 10 0 1 0-11.6 9.9v-7H7.9V12h2.5V9.8c0-2.5 1.5-3.9 3.8-3.9 1.1 0 2.2.2 2.2.2v2.5h-1.3c-1.2 0-1.6.8-1.6 1.6V12h2.8l-.4 2.9h-2.3v7A10 10 0 0 0 22 12z"/></svg>',
   dy: '<svg viewBox="0 0 24 24"><path d="M16.6 3c.4 2.1 1.8 3.6 3.9 3.9v3.2c-1.5 0-2.9-.4-4-1.2v6.4a5.6 5.6 0 1 1-5.6-5.6c.3 0 .6 0 .9.1v3.2a2.5 2.5 0 1 0 1.6 2.3V3z"/></svg>',
+  ig: '<svg viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7.5 2h9A5.5 5.5 0 0 1 22 7.5v9a5.5 5.5 0 0 1-5.5 5.5h-9A5.5 5.5 0 0 1 2 16.5v-9A5.5 5.5 0 0 1 7.5 2zm0 2A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20h9a3.5 3.5 0 0 0 3.5-3.5v-9A3.5 3.5 0 0 0 16.5 4zM12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm5.3-3.3a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4z"/></svg>',
   heart: '<svg viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.6 1.1 5 2.9 1.4-1.8 3-2.9 5-2.9 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg>',
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
   open: '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
@@ -37,16 +38,23 @@ const SOURCES = {
     emptyTitle: "Grab Douyin videos",
     emptySub: "Paste a Douyin user link and hit Fetch. Guests only get the ~20 newest videos for a few visits — connect Douyin to load every video reliably.",
   },
+  instagram: {
+    placeholder: "Paste an Instagram profile URL — e.g. https://www.instagram.com/username/reels/",
+    emptyTitle: "Grab Instagram Reels",
+    emptySub: "Paste a profile link and hit Fetch. Guests only get the ~12 newest reels — connect Instagram to load every reel.",
+  },
 };
 
 const PLATFORMS = {
   youtube: { name: "YouTube", icon: () => ICONS.yt },
   facebook: { name: "Facebook", icon: () => ICONS.fb },
   douyin: { name: "Douyin", icon: () => ICONS.dy },
+  instagram: { name: "Instagram", icon: () => ICONS.ig },
 };
 
 function kindOfUrl(url) {
   if (/douyin\.com/i.test(url)) return "douyin";
+  if (/instagram\.com|instagr\.am/i.test(url)) return "instagram";
   if (/facebook\.com|fb\.com/i.test(url)) return "facebook";
   return "youtube";
 }
@@ -63,10 +71,12 @@ const state = {
   histQuery: "",
   fbLoggedIn: false,
   dyLoggedIn: false,
+  igLoggedIn: false,
   lists: {
     youtube: { videos: [], selected: new Set(), gen: 0, hidden: 0, folder: "" },
     facebook: { videos: [], selected: new Set(), gen: 0, hidden: 0, folder: "" },
     douyin: { videos: [], selected: new Set(), gen: 0, hidden: 0, folder: "", limited: false },
+    instagram: { videos: [], selected: new Set(), gen: 0, hidden: 0, folder: "", limited: false },
   },
 };
 let api = null;
@@ -81,7 +91,7 @@ function setView(view) {
   movePill();
   updateCounts();
   renderDir();
-  if (view === "facebook") scheduleCaptions();
+  if (LAZY_CAPTIONS.includes(view)) scheduleCaptions();
   if (view === "downloaded") loadHistory();
 }
 
@@ -111,7 +121,7 @@ function buildSourceView(kind) {
     const card = e.target.closest(".card:not(.skeleton)");
     if (card) toggleCard(kind, card);
   });
-  if (kind === "facebook") setupCaptionObserver(view);
+  if (LAZY_CAPTIONS.includes(kind)) setupCaptionObserver(view);
 }
 
 /* ---------- grid ---------- */
@@ -156,7 +166,7 @@ function renderGrid(kind) {
     $(".empty-title", view).textContent = "No videos found";
     $(".empty-sub", view).textContent = "Double-check the link, or try another channel / page.";
   }
-  if (kind === "facebook") observeCards();
+  if (LAZY_CAPTIONS.includes(kind)) observeCards(kind);
   updateCounts();
 }
 
@@ -193,9 +203,10 @@ function updateCounts() {
   syncDisabled();
 }
 
-/* ---------- Facebook captions (lazy, for visible cards) ---------- */
+/* ---------- Facebook / Instagram captions (lazy, for visible cards) ---------- */
+const LAZY_CAPTIONS = ["facebook", "instagram"];
 let captionTimer = null;
-let captionsRequested = new Set();
+const captionsRequested = { facebook: new Set(), instagram: new Set() };
 
 function setupCaptionObserver(view) {
   $(".grid-wrap", view).addEventListener("scroll", scheduleCaptions, { passive: true });
@@ -204,8 +215,8 @@ function setupCaptionObserver(view) {
   setInterval(requestVisibleCaptions, 1000);
 }
 
-function observeCards() {
-  captionsRequested = new Set();
+function observeCards(kind) {
+  captionsRequested[kind] = new Set();
   scheduleCaptions();
 }
 
@@ -215,19 +226,21 @@ function scheduleCaptions() {
 }
 
 function requestVisibleCaptions() {
-  if (state.view !== "facebook" || !api) return;
-  const wrap = $("#view-facebook .grid-wrap").getBoundingClientRect();
-  const videos = state.lists.facebook.videos;
+  const kind = state.view;
+  if (!LAZY_CAPTIONS.includes(kind) || !api) return;
+  const wrap = $(`#view-${kind} .grid-wrap`).getBoundingClientRect();
+  const videos = state.lists[kind].videos;
+  const requested = captionsRequested[kind];
   const wanted = [];
-  for (const card of $$("#view-facebook .card:not(.skeleton)")) {
+  for (const card of $$(`#view-${kind} .card:not(.skeleton)`)) {
     const r = card.getBoundingClientRect();
     if (r.bottom < wrap.top - 300 || r.top > wrap.bottom + 300) continue;
     const i = Number(card.dataset.i);
-    if (!videos[i]?.title && !captionsRequested.has(i)) wanted.push(i);
+    if (!videos[i]?.title && !requested.has(i)) wanted.push(i);
   }
   if (!wanted.length) return;
-  wanted.forEach((i) => captionsRequested.add(i));
-  api.load_captions("facebook", wanted);
+  wanted.forEach((i) => requested.add(i));
+  api.load_captions(kind, wanted);
 }
 
 /* ---------- busy / progress ---------- */
@@ -378,6 +391,17 @@ function renderDyConnect() {
     : '<span class="status-pill guest" title="Douyin only shows the ~20 newest videos to guests"><i></i>Guest mode</span><button class="btn primary sm">Connect Douyin</button>';
   $("button", box).addEventListener("click", async () => {
     if (!(await api.dy_login())) toast("error", "Busy", "Another task is running.");
+  });
+  syncDisabled();
+}
+
+function renderIgConnect() {
+  const box = $("#view-instagram .fb-connect");
+  box.innerHTML = state.igLoggedIn
+    ? '<span class="status-pill"><i></i>Instagram connected</span><button class="btn ghost sm">Reconnect</button>'
+    : '<span class="status-pill guest" title="Instagram only shows the ~12 newest reels to guests"><i></i>Guest mode</span><button class="btn primary sm">Connect Instagram</button>';
+  $("button", box).addEventListener("click", async () => {
+    if (!(await api.ig_login())) toast("error", "Busy", "Another task is running.");
   });
   syncDisabled();
 }
@@ -551,6 +575,21 @@ const handlers = {
       run: async () => { if (!(await api.dy_login())) toast("error", "Busy", "Another task is running."); },
     });
   },
+  igLogin: (e) => {
+    const changed = state.igLoggedIn !== e.loggedIn;
+    state.igLoggedIn = e.loggedIn;
+    renderIgConnect();
+    if (changed && e.loggedIn) toast("success", "Instagram connected");
+  },
+  igLoginRequired: (e) => {
+    state.igLoggedIn = e.loggedIn;
+    renderIgConnect();
+    showSkeletonOff("instagram");
+    toast("error", "Instagram login required", e.message, {
+      label: "Connect Instagram",
+      run: async () => { if (!(await api.ig_login())) toast("error", "Busy", "Another task is running."); },
+    });
+  },
   fbExpired: (e) => {
     state.fbLoggedIn = false;
     renderFbConnect();
@@ -588,9 +627,12 @@ const handlers = {
     const note = L.hidden ? `${L.hidden} already downloaded — hidden` : e.url;
     toast("success", `Found ${e.videos.length} new videos`, note);
     if (e.limited) {
+      const pf = e.kind === "instagram"
+        ? { name: "Instagram", login: () => api.ig_login() }
+        : { name: "Douyin", login: () => api.dy_login() };
       toast("info", "Only the newest videos are shown",
-        "Douyin limits guests to the first page of a profile. Connect Douyin to load every video.",
-        { label: "Connect Douyin", run: async () => { if (!(await api.dy_login())) toast("error", "Busy", "Another task is running."); } });
+        `${pf.name} limits guests to the first page of a profile. Connect ${pf.name} to load every video.`,
+        { label: `Connect ${pf.name}`, run: async () => { if (!(await pf.login())) toast("error", "Busy", "Another task is running."); } });
     }
   },
   caption: (e) => {
@@ -624,6 +666,7 @@ window.onPy = (e) => handlers[e.type]?.(e);
 buildSourceView("youtube");
 buildSourceView("facebook");
 buildSourceView("douyin");
+buildSourceView("instagram");
 $$(".tab").forEach((t) => t.addEventListener("click", () => setView(t.dataset.view)));
 $("#folderBtn").addEventListener("click", chooseDir);
 $("#openDirBtn").addEventListener("click", () => api.open_folder(state.dir));
@@ -642,11 +685,13 @@ window.addEventListener("pywebviewready", async () => {
   state.saved = init.saved;
   state.fbLoggedIn = init.fbLoggedIn;
   state.dyLoggedIn = init.dyLoggedIn;
+  state.igLoggedIn = init.igLoggedIn;
   state.engine.current = init.engine;
   renderEngine();
   renderDir();
   renderSaved();
   renderFbConnect();
   renderDyConnect();
+  renderIgConnect();
   loadHistory();
 });
