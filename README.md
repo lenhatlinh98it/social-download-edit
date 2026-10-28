@@ -36,6 +36,21 @@ Grabber starts Chrome Portable with a local remote-debugging port, opens the pro
 
 Automating uploads may be against TikTok's terms; you are responsible for the accounts you use.
 
+## Research (niches → channels → TikTok check)
+
+Finds promising YouTube Shorts channels in a hot niche that are **not on TikTok yet**. Needs a free YouTube Data API v3 key in a `.env` file next to the app (git-ignored):
+
+```
+YOUTUBE_API_KEY=your-key
+```
+
+1. Pick a market (US / UK / DE / JP / KR) and press **Research niches**: 10 niches from a built-in list of 40 are scored by the view velocity of their most-viewed Shorts of the last 14 days, the share of channels younger than 24 months and the number of 100K+ Shorts (~1,000 API units; scores are kept 24 h, so pressing again scores the next 10). Or type your own niche.
+2. **Find channels**: Shorts channels from the niche, kept when created in the last 24 months, 5K–500K subscribers, ≥ 70 % Shorts and active in the last 30 days, ranked by views/day, recent views and upload pace.
+3. Each candidate is checked on TikTok (in the Chrome Portable **Research** profile, no login needed): TikTok links on the YouTube About page and in descriptions, handle variants, a user search by name (avatar compared by perceptual hash), a video search by Short titles (copies / possible re-uploads), and each TikTok account found is opened (bio link back to YouTube, avatar, matching videos).
+4. The top 5 channels with no TikTok account are shown, plus every suspect / re-uploader / look-alike account with its evidence and links to verify by hand.
+
+**Check on TikTok** runs step 3 for a single YouTube channel link. If TikTok shows a captcha, solve it in the Chrome window; the run waits.
+
 ## Logs
 
 The **Logs** tab records fetches, downloads, exports and every TikTok posting step (with error details) in `logs.jsonl`, filterable by source or errors only.
@@ -82,6 +97,7 @@ Output is `dist\Grabber\` (includes ffmpeg if `bin\` is present). The Desktop sh
 | `web/` | UI (`editor.js` = Edit, `batch.js` = Batch/Merge) |
 | `facebook.py` / `douyin.py` / `instagram.py` | Listing videos with Playwright |
 | `tiktok.py` | Posting through Chrome Portable profiles (CDP) |
+| `research.py` | Niche scoring, Shorts channel search and TikTok existence check |
 | `engine.py` | Update yt-dlp from PyPI from inside the app |
 | `build.py` | Package the `.exe` with PyInstaller |
 | `tools/make_icon.py` | Regenerate the icon (needs Pillow) |

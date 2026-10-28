@@ -87,7 +87,7 @@ function setView(view) {
   state.view = view;
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${view}`));
-  $("#dock").classList.toggle("hidden", ["saved", "downloaded", "tiktok", "logs", "editor"].includes(view));
+  $("#dock").classList.toggle("hidden", ["saved", "downloaded", "tiktok", "research", "logs", "editor"].includes(view));
   window.onEditorView?.(view === "editor");
   movePill();
   updateCounts();
@@ -96,6 +96,7 @@ function setView(view) {
   if (view === "downloaded") loadHistory();
   if (view === "tiktok") loadTT();
   if (view === "logs") loadLogs();
+  if (view === "research") window.loadResearch?.();
 }
 
 function movePill() {

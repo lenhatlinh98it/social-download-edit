@@ -1,3 +1,6 @@
+# Secrets (API keys)
+.env
+
 # Setup (setup.bat / setup.ps1)
 .venv/
 venv/

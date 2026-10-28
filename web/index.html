@@ -59,6 +59,10 @@
           <svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.4-7.5a1 1 0 0 0 0-1.8L3.4 3.6a.99.99 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>
           TikTok
         </button>
+        <button class="tab" data-view="research">
+          <svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8M15 8h5v5"/></svg>
+          Research
+        </button>
         <button class="tab" data-view="logs">
           <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7M9 8h3"/></svg>
           Logs
@@ -123,6 +127,36 @@
           <span class="chip mono" id="histCountChip">0 videos</span>
         </div>
         <div class="hist-list" id="histList"></div>
+      </section>
+
+      <section class="view" id="view-research">
+        <div class="rs-bar glass">
+          <div class="seg" id="rsMarket">
+            <button class="on" data-m="US">US</button>
+            <button data-m="UK">UK</button>
+            <button data-m="DE">DE</button>
+            <button data-m="JP">JP</button>
+            <button data-m="KR">KR</button>
+          </div>
+          <button class="btn primary sm" id="rsNichesBtn">Research niches</button>
+          <div class="rs-input">
+            <input id="rsNiche" list="rsNicheList" placeholder="…or pick / type a niche" spellcheck="false">
+            <datalist id="rsNicheList"></datalist>
+          </div>
+          <button class="btn ghost sm" id="rsFind">Find channels</button>
+          <span class="chip mono" id="rsQuota">API</span>
+        </div>
+        <div class="rs-bar glass">
+          <div class="rs-input grow"><input id="rsCheckUrl" placeholder="Check one YouTube channel on TikTok — paste https://www.youtube.com/@channel" spellcheck="false"></div>
+          <button class="btn ghost sm" id="rsCheckBtn">Check on TikTok</button>
+        </div>
+        <div class="tt-empty" id="rsNoKey" hidden>No YouTube API key found. Create a <b>.env</b> file next to the app with <span class="mono">YOUTUBE_API_KEY=…</span> and reopen this tab.</div>
+        <div class="rs-progress" id="rsProgress"><span id="rsProgressText"></span><div class="track"><i></i></div><button class="btn ghost sm" id="rsCancel" hidden>Cancel</button></div>
+        <div class="rs-scroll">
+          <div class="saved-head"><h2>Hot niches</h2><span class="muted" id="rsNicheMore"></span></div>
+          <div class="rs-niches" id="rsNiches"></div>
+          <div id="rsResults"></div>
+        </div>
       </section>
 
       <section class="view" id="view-logs">
@@ -577,5 +611,6 @@
   <script src="app.js"></script>
   <script src="editor.js"></script>
   <script src="batch.js"></script>
+  <script src="research.js"></script>
 </body>
 </html>
