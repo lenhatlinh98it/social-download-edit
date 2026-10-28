@@ -59,6 +59,10 @@
           <svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.4-7.5a1 1 0 0 0 0-1.8L3.4 3.6a.99.99 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>
           TikTok
         </button>
+        <button class="tab" data-view="logs">
+          <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7M9 8h3"/></svg>
+          Logs
+        </button>
         <button class="tab" data-view="editor">
           <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>
           Editor
@@ -119,6 +123,26 @@
           <span class="chip mono" id="histCountChip">0 videos</span>
         </div>
         <div class="hist-list" id="histList"></div>
+      </section>
+
+      <section class="view" id="view-logs">
+        <div class="history-bar glass">
+          <div class="seg" id="logFilter">
+            <button class="on" data-f="all">All</button>
+            <button data-f="tiktok">TikTok</button>
+            <button data-f="download">Download</button>
+            <button data-f="fetch">Fetch</button>
+            <button data-f="editor">Editor</button>
+            <button data-f="error">Errors</button>
+          </div>
+          <div class="hist-search">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <input id="logSearch" placeholder="Search logs" spellcheck="false">
+          </div>
+          <button class="btn ghost sm" id="logReveal">Show file</button>
+          <button class="btn ghost sm" id="logClear">Clear</button>
+        </div>
+        <div class="hist-list" id="logList"></div>
       </section>
 
       <section class="view" id="view-tiktok">
