@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 
@@ -36,6 +37,12 @@ DOWNLOADED_FILE = os.path.join(facebook.DATA_DIR, "downloaded.json")
 SETTINGS_FILE = os.path.join(facebook.DATA_DIR, "settings.json")
 PRESETS_FILE = os.path.join(facebook.DATA_DIR, "edit_presets.json")
 TT_POSTS_FILE = os.path.join(facebook.DATA_DIR, "tiktok_posts.json")
+LOG_FILE = os.path.join(facebook.DATA_DIR, "logs.jsonl")
+LOG_MAX_BYTES = 2_000_000
+LOG_EVENTS = {"list", "done", "editDone", "batchDone", "stripDone", "mergeDone", "fbExpired",
+              "dyLoginRequired", "igLoginRequired"}
+TASK_SOURCES = {"_fetch_task": "fetch", "_download_task": "download", "_export_task": "editor", "_batch_task": "editor",
+                "_merge_task": "editor", "_strip_task": "editor", "_tt_post_task": "tiktok"}
 DROP_KINDS = {**dict.fromkeys((".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"), "video"),
               **dict.fromkeys((".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"), "audio"),
               **dict.fromkeys((".png", ".jpg", ".jpeg", ".webp"), "image")}
@@ -140,6 +147,35 @@ def write_downloaded(data):
 
 
 _downloaded_lock = threading.Lock()
+_log_lock = threading.Lock()
+
+
+def append_log(entry):
+    """One JSON object per line; trimmed to the newest half once the file passes LOG_MAX_BYTES."""
+    with _log_lock:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        if os.path.getsize(LOG_FILE) > LOG_MAX_BYTES:
+            with open(LOG_FILE, encoding="utf-8") as f:
+                lines = f.readlines()
+            with open(LOG_FILE, "w", encoding="utf-8") as f:
+                f.writelines(lines[len(lines) // 2:])
+
+
+def read_logs(limit=3000):
+    try:
+        with open(LOG_FILE, encoding="utf-8") as f:
+            lines = f.readlines()[-limit:]
+    except OSError:
+        return []
+    entries = []
+    for line in reversed(lines):
+        try:
+            entries.append(json.loads(line))
+        except ValueError:
+            pass
+    return entries
 
 
 def mark_downloaded(kind, video, title, file):
@@ -255,6 +291,8 @@ class Api:
     # ---------- plumbing ----------
     def _emit(self, type_, **data):
         payload = json.dumps({"type": type_, **data}, ensure_ascii=False)
+        if type_ in LOG_EVENTS:
+            self._log_event(type_, data)
         try:
             self._window.evaluate_js(f"window.onPy({payload})")
         except Exception:  # noqa: BLE001 - window may be closing
@@ -272,6 +310,7 @@ class Api:
             try:
                 target(*args)
             except Exception as ex:  # noqa: BLE001 - surface any error to the UI
+                self._log("error", TASK_SOURCES.get(target.__name__, "app"), str(ex), traceback.format_exc())
                 self._emit("error", message=str(ex))
             finally:
                 with self._lock:
@@ -280,6 +319,54 @@ class Api:
 
         threading.Thread(target=wrapper, daemon=True).start()
         return True
+
+    # ---------- logs ----------
+    def _log(self, level, source, message, detail=""):
+        entry = {"t": time.strftime("%Y-%m-%d %H:%M:%S"), "level": level, "source": source,
+                 "message": message, "detail": detail}
+        try:
+            append_log(entry)
+        except OSError:
+            pass
+        self._emit("log", entry=entry)
+
+    def _log_event(self, type_, data):
+        """Turn the UI events that end a task into log lines."""
+        if type_ == "list":
+            hidden = f" ({data['hidden']} already downloaded)" if data.get("hidden") else ""
+            self._log("info", "fetch", f"{PLATFORM_NAMES[data['kind']]}: {len(data['videos'])} new videos from "
+                                       f"{data.get('source') or data['url']}{hidden}", data["url"])
+        elif type_ == "done":
+            failed = data.get("failed") or []
+            level = "warning" if failed or data.get("cancelled") else "success"
+            self._log(level, "download", f"Downloaded {data['ok']}/{data['total']}" + (
+                f", {len(failed)} failed" if failed else "") + (f", {data['cancelled']} cancelled" if data.get("cancelled") else ""),
+                      "\n".join([data.get("dir") or "", *failed]).strip())
+        elif type_ == "editDone":
+            self._log("success", "editor", f"Exported {data['name']} ({data['width']}×{data['height']}, {data['encoder']})", data["path"])
+        elif type_ in ("batchDone", "stripDone"):
+            failed = data.get("failed") or []
+            what = "Batch export" if type_ == "batchDone" else "Metadata strip"
+            self._log("warning" if failed else "success", "editor", f"{what}: {data['ok']}/{data['total']} done", "\n".join(failed))
+        elif type_ == "mergeDone" and not data.get("cancelled"):
+            self._log("success", "editor", f"Merged into {data['name']} ({data['width']}×{data['height']})", data["path"])
+        elif type_ in ("fbExpired", "dyLoginRequired", "igLoginRequired"):
+            self._log("warning", "fetch", data.get("message") or type_)
+
+    def logs_list(self):
+        return read_logs()
+
+    def logs_clear(self):
+        with _log_lock:
+            try:
+                os.remove(LOG_FILE)
+            except OSError:
+                pass
+        return []
+
+    def logs_reveal(self):
+        if os.path.isfile(LOG_FILE):
+            self.reveal_file(LOG_FILE)
 
     # ---------- state ----------
     def init(self):
@@ -769,22 +856,35 @@ class Api:
 
     def _tt_post_task(self, root, profile, file, caption, when, review):
         name = profile["name"]
+        self._log("info", "tiktok", f"{name}: start {'scheduling for ' + when.strftime('%Y-%m-%d %H:%M') if when else 'posting now'}"
+                                    f"{' (stop before Post)' if review else ''} — {os.path.basename(file)}", caption)
+
+        def status(text):
+            self._emit("status", text=f"{name}: {text}", progress=None)
+            self._log("info", "tiktok", f"{name}: {text}")
+
         record = {"file": file, "profile": profile["dir"], "profileName": name, "caption": caption,
                   "at": time.strftime("%Y-%m-%d %H:%M"), "when": when.strftime("%Y-%m-%d %H:%M") if when else "",
                   "status": "", "error": ""}
         try:
-            country = tiktok.post(root, profile["dir"], file, caption, when, profile["country"], review,
-                                  lambda text: self._emit("status", text=f"{name}: {text}", progress=None))
+            country = tiktok.post(root, profile["dir"], file, caption, when, profile["country"], review, status)
             record["status"] = "review" if review else "posted"
             record["country"] = country
         except (tiktok.PostError, tiktok.ChromeBusy) as ex:
             record["status"], record["error"] = "failed", str(ex)
+            record["trace"] = traceback.format_exc()
         except Exception as ex:  # noqa: BLE001 - Playwright / network errors: report and keep the app alive
             record["status"], record["error"] = "failed", f"{type(ex).__name__}: {ex}"
+            record["trace"] = traceback.format_exc()
         posts = _read_json(TT_POSTS_FILE, [])
         posts.append(record)
         _write_json(TT_POSTS_FILE, posts[-500:])
         done = {"posted": "Scheduled on" if when else "Posted to", "review": "Ready for review in"}.get(record["status"])
+        if done:
+            self._log("success", "tiktok", f"{done} {name}" + (f" for {record['when']}" if when else "")
+                      + f" — {os.path.basename(file)}", caption)
+        else:
+            self._log("error", "tiktok", f"Posting to {name} failed: {record['error']}", record.get("trace", ""))
         self._emit("status", text=f"{done} {name}" if done else f"Posting to {name} failed", progress=0)
         self._emit("ttPosted", record=record)
         self._notify("TikTok", f"{done} {name}" if done else f"Posting to {name} failed")

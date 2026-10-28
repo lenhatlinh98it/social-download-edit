@@ -21,6 +21,7 @@ Filenames follow the video title or caption. Videos already downloaded (or marke
 - **Batch** — save an edit as a preset and apply it to many videos via a queue.
 - **Merge** — combine clips into one video (blurred background, letterbox, or crop; crossfade).
 - Drag-and-drop video, music, or a logo image onto the window.
+- Sources above 4K (e.g. 4320×5760 AV1) are exported scaled down to fit 4K, since H.264 encoders stop there.
 - When the app is minimized, finished downloads and exports show a Windows toast.
 
 ## Post to TikTok
@@ -34,6 +35,10 @@ Post a downloaded video to one of your TikTok channels, each logged in inside it
 Grabber starts Chrome Portable with a local remote-debugging port, opens the profile, waits until the exit IP is in the chosen country, then fills TikTok Studio's upload page and presses Post (or stops before Post if *Stop before Post* is ticked). Chrome stays open for the next post. **Close every Chrome Portable window before the first post** — a Chrome started without the debugging port cannot be controlled. Posts are logged in `tiktok_posts.json`.
 
 Automating uploads may be against TikTok's terms; you are responsible for the accounts you use.
+
+## Logs
+
+The **Logs** tab records fetches, downloads, exports and every TikTok posting step (with error details) in `logs.jsonl`, filterable by source or errors only.
 
 ## Install (new machine)
 
@@ -53,7 +58,7 @@ Re-run `setup.bat` anytime to repair or update.
 
 Stored under `%USERPROFILE%\.yt-shorts-downloader\` (not in this repo):
 
-`settings.json`, `saved.json`, `downloaded.json`, `tiktok_posts.json`, Facebook / Douyin / Instagram login sessions, and the in-app yt-dlp engine update.
+`settings.json`, `saved.json`, `downloaded.json`, `tiktok_posts.json`, `logs.jsonl`, Facebook / Douyin / Instagram login sessions, and the in-app yt-dlp engine update.
 
 ## Build a `.exe` (optional)
 

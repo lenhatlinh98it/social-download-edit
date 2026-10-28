@@ -119,6 +119,15 @@ def _even(v):
     return max(2, int(round(v / 2)) * 2)
 
 
+MAX_LONG, MAX_SHORT = 3840, 2160  # H.264 encoders (NVENC/QSV/AMF/openh264) stop around 4K
+
+
+def _encodable(w, h):
+    """Even output size, scaled down (aspect kept) to fit 4K so sources like 4320x5760 still encode."""
+    k = min(1.0, MAX_LONG / max(w, h), MAX_SHORT / min(w, h))
+    return _even(w * k), _even(h * k)
+
+
 def rotated_size(info, rotate):
     w, h = info["width"], info["height"]
     return (h, w) if rotate in (90, 270) else (w, h)
@@ -145,7 +154,7 @@ def build_geometry(info, spec, length):
     c = spec.get("crop") or {"x": 0, "y": 0, "w": rw, "h": rh}
     cw, ch = min(int(c["w"]), rw), min(int(c["h"]), rh)
     cx, cy = max(0, min(int(c["x"]), rw - cw)), max(0, min(int(c["y"]), rh - ch))
-    ow, oh = _even(cw), _even(ch)
+    ow, oh = _encodable(cw, ch)
     z0 = float(spec.get("zoom") or 1)
     z1 = float(spec.get("zoomEnd") or z0) if spec.get("zoomAnimate") else z0
     px, py = float(spec.get("panX", 0.5)), float(spec.get("panY", 0.5))
@@ -469,7 +478,7 @@ def merge(ffmpeg, clips, infos, dst, opts, on_progress=None, should_cancel=None)
     if opts.get("size") in MERGE_SIZES:
         W, H = MERGE_SIZES[opts["size"]]
     else:
-        W, H = _even(infos[0]["width"]), _even(infos[0]["height"])
+        W, H = _encodable(infos[0]["width"], infos[0]["height"])
     fit = opts.get("fit") or "blur"
     durations = [max(0.1, i["duration"]) for i in infos]
     t = min(max(float(opts.get("transition") or 0), 0), min(durations) / 2 - 0.05)

@@ -138,13 +138,32 @@ def _type_caption(page, caption):
     page.wait_for_timeout(500)
 
 
-def _set_schedule(page, when):
-    page.locator('[data-e2e="schedule_container"] input[name="postSchedule"][value="schedule"]').check(force=True)
-    page.wait_for_selector('[aria-label="Select date"]', timeout=10000)
+SCHEDULE_INPUTS = '[data-e2e="schedule_container"] input.TUXTextInputCore-input'
 
-    page.click('[aria-label="Select date"]')
+
+def _month_steps(when):
     today = datetime.now()
-    for _ in range((when.year * 12 + when.month) - (today.year * 12 + today.month)):
+    return (when.year * 12 + when.month) - (today.year * 12 + today.month)
+
+
+def _set_schedule(page, when):
+    """TikTok serves two schedule pickers (A/B test): Picker popovers with aria-labels, or two read-only
+    inputs (time "HH:MM", date "YYYY-MM-DD") with a calendar and a scroll list. Both are handled."""
+    page.locator('[data-e2e="schedule_container"] input[name="postSchedule"][value="schedule"]').check(force=True)
+    try:
+        page.wait_for_function(f"""() => document.querySelector('[aria-label="Select date"]')
+            || document.querySelectorAll('{SCHEDULE_INPUTS}').length >= 2""", timeout=10000)
+    except PlaywrightTimeout:
+        raise PostError("TikTok's schedule picker did not appear after choosing Schedule.") from None
+    if page.locator('[aria-label="Select date"]').count():
+        _schedule_picker(page, when)
+    else:
+        _schedule_inputs(page, when)
+
+
+def _schedule_picker(page, when):
+    page.click('[aria-label="Select date"]')
+    for _ in range(_month_steps(when)):
         page.click('[aria-label="Next month"]')
         page.wait_for_timeout(300)
     day = page.locator('.DatePicker__day[data-outside="false"]', has_text=re.compile(rf"^{when.day}$"))
@@ -165,6 +184,39 @@ def _set_schedule(page, when):
     shown = page.inner_text('[aria-label="Select time"] .Picker__value').strip()
     if shown != f"{when:%H:%M}":
         raise PostError(f"Could not set the schedule time (TikTok shows {shown}).")
+
+
+def _schedule_inputs(page, when):
+    inputs = page.locator(SCHEDULE_INPUTS)
+    values = [inputs.nth(i).input_value() for i in range(inputs.count())]
+    date_in = inputs.nth(next(i for i, v in enumerate(values) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v)))
+    time_in = inputs.nth(next(i for i, v in enumerate(values) if re.fullmatch(r"\d{1,2}:\d{2}", v)))
+
+    date_in.click()
+    page.wait_for_selector(".calendar-wrapper", timeout=5000)
+    for _ in range(_month_steps(when)):
+        page.locator(".calendar-wrapper .arrow").last.click()
+        page.wait_for_timeout(300)
+    day = page.locator(".calendar-wrapper .day.valid", has_text=re.compile(rf"^{when.day}$"))
+    if not day.count():
+        raise PostError("TikTok does not allow scheduling on that date (it accepts today up to ~30 days ahead).")
+    day.first.click()
+    page.wait_for_timeout(500)
+    if date_in.input_value() != f"{when:%Y-%m-%d}":
+        raise PostError(f"Could not set the schedule date (TikTok shows {date_in.input_value()}).")
+
+    time_in.click()
+    page.wait_for_selector(".tiktok-timepicker-time-picker-container:not(.tiktok-timepicker-invisible)", timeout=5000)
+    for side, value in (("left", when.hour), ("right", when.minute)):
+        option = page.locator(f".tiktok-timepicker-option-text.tiktok-timepicker-{side}", has_text=re.compile(rf"^{value:02d}$"))
+        if not option.count() or "disabled" in (option.first.get_attribute("class") or ""):
+            raise PostError(f"TikTok does not allow {when:%H:%M} on that day — pick a later time.")
+        option.first.click()
+        page.wait_for_timeout(300)
+    page.locator('[data-e2e="schedule_container"] .scheduled-title-container').click()  # close the list
+    page.wait_for_timeout(300)
+    if time_in.input_value() != f"{when:%H:%M}":
+        raise PostError(f"Could not set the schedule time (TikTok shows {time_in.input_value()}) — pick a later time.")
 
 
 def _wait_posted(page, timeout=180):

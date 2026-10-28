@@ -87,7 +87,7 @@ function setView(view) {
   state.view = view;
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${view}`));
-  $("#dock").classList.toggle("hidden", ["saved", "downloaded", "tiktok", "editor"].includes(view));
+  $("#dock").classList.toggle("hidden", ["saved", "downloaded", "tiktok", "logs", "editor"].includes(view));
   window.onEditorView?.(view === "editor");
   movePill();
   updateCounts();
@@ -95,6 +95,7 @@ function setView(view) {
   if (LAZY_CAPTIONS.includes(view)) scheduleCaptions();
   if (view === "downloaded") loadHistory();
   if (view === "tiktok") loadTT();
+  if (view === "logs") loadLogs();
 }
 
 function movePill() {
@@ -676,6 +677,57 @@ $("#ttProfiles").addEventListener("change", async (e) => {
   if (p) p.country = e.target.value;
 });
 
+/* ---------- logs ---------- */
+const logs = { items: [], filter: "all", query: "" };
+
+async function loadLogs() {
+  if (!api) return;
+  logs.items = await api.logs_list();
+  renderLogs();
+}
+
+function logRowHTML(e) {
+  return `<div class="log-row">
+    <span class="mono">${esc(e.t)}</span>
+    <span class="lv ${esc(e.level)}">${esc(e.level)}</span>
+    <span class="log-src">${esc(e.source)}</span>
+    <div class="msg">${esc(e.message)}${e.detail ? `<details><summary>Details</summary><pre>${esc(e.detail)}</pre></details>` : ""}</div>
+  </div>`;
+}
+
+function renderLogs() {
+  const q = logs.query.trim().toLowerCase();
+  const items = logs.items.filter((e) =>
+    (logs.filter === "all" || (logs.filter === "error" ? e.level === "error" || e.level === "warning" : e.source === logs.filter))
+    && (!q || `${e.message}\n${e.detail}`.toLowerCase().includes(q)));
+  $("#logList").innerHTML = items.length ? items.slice(0, 1500).map(logRowHTML).join("")
+    : `<div class="hist-empty"><b>${logs.items.length ? "No matches" : "No logs yet"}</b>${logs.items.length
+      ? "Try another filter or keyword." : "Downloads, exports and TikTok posts are recorded here."}</div>`;
+}
+
+$("#logFilter").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  logs.filter = b.dataset.f;
+  $$("#logFilter button").forEach((x) => x.classList.toggle("on", x === b));
+  renderLogs();
+});
+$("#logSearch").addEventListener("input", (e) => { logs.query = e.target.value; renderLogs(); });
+$("#logReveal").addEventListener("click", () => api.logs_reveal());
+$("#logClear").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  if (!btn.classList.contains("confirm")) {
+    btn.classList.add("confirm");
+    btn.textContent = "Clear all?";
+    setTimeout(() => { btn.classList.remove("confirm"); btn.textContent = "Clear"; }, 3000);
+    return;
+  }
+  btn.classList.remove("confirm");
+  btn.textContent = "Clear";
+  logs.items = await api.logs_clear();
+  renderLogs();
+});
+
 /* ---------- events from Python ---------- */
 const handlers = {
   busy: (e) => setBusy(e.busy),
@@ -781,6 +833,10 @@ const handlers = {
     badge.textContent = { done: "✓ Saved", failed: "Failed", cancelled: "Cancelled" }[e.state] || `${e.pct}%`;
     bar.classList.toggle("on", e.state === "downloading");
     $("i", bar).style.width = `${e.pct}%`;
+  },
+  log: (e) => {
+    logs.items.unshift(e.entry);
+    if (state.view === "logs") renderLogs();
   },
   ttPosted: (e) => {
     const r = e.record;
