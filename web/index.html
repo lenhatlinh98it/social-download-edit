@@ -144,13 +144,22 @@
             <datalist id="rsNicheList"></datalist>
           </div>
           <button class="btn ghost sm" id="rsFind">Find channels</button>
-          <span class="chip mono" id="rsQuota">API</span>
+          <button class="chip mono" id="rsQuota" title="YouTube API key and today's quota — click to change the key">API</button>
         </div>
         <div class="rs-bar glass">
           <div class="rs-input grow"><input id="rsCheckUrl" placeholder="Check one YouTube channel on TikTok — paste https://www.youtube.com/@channel" spellcheck="false"></div>
           <button class="btn ghost sm" id="rsCheckBtn">Check on TikTok</button>
         </div>
-        <div class="tt-empty" id="rsNoKey" hidden>No YouTube API key found. Create a <b>.env</b> file next to the app with <span class="mono">YOUTUBE_API_KEY=…</span> and reopen this tab.</div>
+        <form class="rs-key glass" id="rsKeyBox" hidden autocomplete="off">
+          <div class="rs-key-text">
+            <b>YouTube API key</b>
+            <span class="muted" id="rsKeyNow"></span>
+            <span class="muted">Free key: <a href="#" data-url="https://console.cloud.google.com/apis/library/youtube.googleapis.com">Google Cloud Console</a> → enable <b>YouTube Data API v3</b> → Credentials → Create credentials → API key. 10,000 units per day.</span>
+          </div>
+          <input id="rsKeyInput" type="password" placeholder="Paste the key (AIza…)" spellcheck="false">
+          <button class="btn primary sm" type="submit" id="rsKeySave">Save</button>
+          <button class="btn ghost sm" type="button" id="rsKeyCancel">Close</button>
+        </form>
         <div class="rs-progress" id="rsProgress"><span id="rsProgressText"></span><div class="track"><i></i></div><button class="btn ghost sm" id="rsCancel" hidden>Cancel</button></div>
         <div class="rs-scroll">
           <div class="saved-head"><h2>Hot niches</h2><span class="muted" id="rsNicheMore"></span></div>

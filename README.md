@@ -38,11 +38,7 @@ Automating uploads may be against TikTok's terms; you are responsible for the ac
 
 ## Research (niches → channels → TikTok check)
 
-Finds promising YouTube Shorts channels in a hot niche that are **not on TikTok yet**. Needs a free YouTube Data API v3 key in a `.env` file next to the app (git-ignored):
-
-```
-YOUTUBE_API_KEY=your-key
-```
+Finds promising YouTube Shorts channels in a hot niche that are **not on TikTok yet**. Needs a free YouTube Data API v3 key (Google Cloud Console → enable *YouTube Data API v3* → Credentials → Create API key): paste it in the box at the top of the **Research** tab — it is checked with one API call and kept in the app settings. Click the *API today* chip to change it later. (A `YOUTUBE_API_KEY=` line in a git-ignored `.env` file next to the app also works.)
 
 1. Pick a market (US / UK / DE / JP / KR) and press **Research niches**: 10 niches from a built-in list of 40 are scored by the view velocity of their most-viewed Shorts of the last 14 days, the share of channels younger than 24 months and the number of 100K+ Shorts (~1,000 API units; scores are kept 24 h, so pressing again scores the next 10). Or type your own niche.
 2. **Find channels**: Shorts channels from the niche, kept when created in the last 24 months, 5K–500K subscribers, ≥ 70 % Shorts and active in the last 30 days, ranked by views/day, recent views and upload pace.

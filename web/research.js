@@ -27,9 +27,13 @@ function renderResearch() {
   const st = rs.state;
   if (!st) return;
   $$("#rsMarket button").forEach((b) => b.classList.toggle("on", b.dataset.m === rs.market));
-  $("#rsQuota").textContent = st.hasKey ? `API today: ${rsNum(st.quota)} / ${rsNum(st.quotaMax)}` : "No API key";
+  $("#rsQuota").textContent = st.hasKey ? `API today: ${rsNum(st.quota)} / ${rsNum(st.quotaMax)}` : "Add API key";
   $("#rsQuota").classList.toggle("warn", !st.hasKey || st.quota > st.quotaMax * 0.8);
-  $("#rsNoKey").hidden = st.hasKey;
+  if (!st.hasKey) $("#rsKeyBox").hidden = false;
+  $("#rsKeyNow").textContent = st.keyMasked
+    ? `In use: ${st.keyMasked}${st.keySource === ".env" ? " (from the .env file)" : ""}. Paste a new key to replace it.`
+    : "No key yet — Research needs one.";
+  $("#rsKeyCancel").hidden = !st.hasKey;
   ["#rsNichesBtn", "#rsFind", "#rsCheckBtn"].forEach((s) => ($(s).disabled = rs.running || !st.hasKey));
   $("#rsCancel").hidden = !rs.running;
   $("#rsProgress").classList.toggle("on", rs.running);
@@ -47,7 +51,7 @@ function renderResearch() {
       <div class="rs-examples">${n.examples.map((v) => `<a href="#" data-url="https://www.youtube.com/shorts/${esc(v.id)}" title="${esc(v.title)}">${short(v.views)} · ${esc(v.channel)}</a>`).join("")}</div>
       <button class="btn primary sm rs-pick">Find channels</button>
     </div>`).join("")
-    : `<div class="tt-empty">${st.hasKey ? "Press <b>Research niches</b> to score niches for this market (about 1,000 API units for 10 niches; results are kept 24 h)." : "Add your YouTube API key first."}</div>`;
+    : `<div class="tt-empty">${st.hasKey ? "Press <b>Research niches</b> to score niches for this market (about 1,000 API units for 10 niches; results are kept 24 h)." : "Add your YouTube API key above first."}</div>`;
   $("#rsNicheMore").textContent = rs.niches.length > 5 ? `${rs.niches.length} niches scored for ${rs.market} in the last 24 h — top 5 shown` : "";
 
   const box = $("#rsResults");
@@ -132,6 +136,27 @@ $("#rsCheckBtn").addEventListener("click", async () => {
   renderResearch();
 });
 $("#rsCheckUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#rsCheckBtn").click(); });
+$("#rsQuota").addEventListener("click", () => {
+  $("#rsKeyBox").hidden = !$("#rsKeyBox").hidden;
+  if (!$("#rsKeyBox").hidden) $("#rsKeyInput").focus();
+});
+$("#rsKeyCancel").addEventListener("click", () => { $("#rsKeyBox").hidden = true; });
+$("#rsKeyBox").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const key = $("#rsKeyInput").value.trim();
+  if (!key) { toast("error", "Paste your API key first"); return; }
+  const btn = $("#rsKeySave");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  const res = await api.research_set_key(key);
+  btn.disabled = false;
+  btn.textContent = "Save";
+  if (!res.ok) { toast("error", "API key not saved", res.error); return; }
+  $("#rsKeyInput").value = "";
+  $("#rsKeyBox").hidden = true;
+  toast("success", "API key saved", "It is checked and kept in the app settings.");
+  loadResearch();
+});
 $("#rsCancel").addEventListener("click", () => { api.research_cancel(); setRsProgress("Cancelling…", null); });
 $("#rsNiches").addEventListener("click", (e) => {
   const pick = e.target.closest(".rs-pick");

@@ -806,9 +806,18 @@ class Api:
             subprocess.Popen(["explorer", f"/select,{os.path.normpath(path)}"])
 
     # ---------- niche & channel research ----------
-    def _research(self):
+    @staticmethod
+    def _research_key():
+        """(key, source): the key saved in the app wins over YOUTUBE_API_KEY in the environment / a .env file."""
+        saved = load_settings().get("youtubeApiKey") or ""
+        if saved:
+            return saved, "app"
         key = research.load_api_key(os.path.dirname(os.path.abspath(sys.argv[0])), os.path.dirname(sys.executable),
                                     BASE_DIR, facebook.DATA_DIR)
+        return key, ".env" if key else ""
+
+    def _research(self):
+        key = self._research_key()[0]
 
         def log(level, message, detail=""):
             self._log(level, "research", message, detail)
@@ -827,7 +836,9 @@ class Api:
         except research.ResearchError:
             has_key, quota, niches, last = False, 0, [], None
         lang = research.MARKETS.get(market, research.MARKETS["US"])["lang"]
+        key, source = self._research_key()
         return {"markets": list(research.MARKETS), "hasKey": has_key, "quota": quota, "quotaMax": research.DAILY_QUOTA,
+                "keyMasked": f"{key[:4]}…{key[-4:]}" if len(key) > 8 else "", "keySource": source,
                 "niches": niches, "running": self._research_running, "last": last,
                 "catalog": [{"id": n[0], "name": n[1], "keyword": n[2][lang][0]} for n in research.NICHES],
                 "chromeRoot": bool(load_settings().get("ttChromeRoot"))}
@@ -861,6 +872,27 @@ class Api:
             return True
         except research.ResearchError:
             return False
+
+    def research_set_key(self, key):
+        """Check the key with one cheap API call (1 unit), then keep it in settings.json."""
+        key = (key or "").strip()
+        if not key:
+            settings = load_settings()
+            settings.pop("youtubeApiKey", None)
+            _write_json(SETTINGS_FILE, settings)
+            self._log("info", "research", "YouTube API key removed from the app")
+            return {"ok": True}
+        if not re.fullmatch(r"[A-Za-z0-9_\-]{30,60}", key):
+            return {"ok": False, "error": "This does not look like a Google API key (it usually starts with “AIza”)."}
+        try:
+            research.YouTube(key, lambda _units: None).call("channels", part="id", forHandle="@YouTube")
+        except research.ResearchError as ex:
+            return {"ok": False, "error": f"YouTube rejected the key: {ex}"}
+        except OSError as ex:
+            return {"ok": False, "error": f"Could not reach YouTube to check the key: {ex}"}
+        save_setting("youtubeApiKey", key)
+        self._log("success", "research", f"YouTube API key saved ({key[:4]}…{key[-4:]})")
+        return {"ok": True}
 
     def research_cancel(self):
         self._research_cancel.set()
@@ -927,7 +959,7 @@ class Api:
 
     def research_open(self, url):
         host = re.sub(r"^https?://", "", (url or "").lower()).split("/")[0]
-        if host.endswith(("youtube.com", "tiktok.com")):
+        if host.endswith(("youtube.com", "tiktok.com")) or host == "console.cloud.google.com":
             webbrowser.open(url)
 
     # ---------- TikTok posting (Chrome Portable profiles) ----------

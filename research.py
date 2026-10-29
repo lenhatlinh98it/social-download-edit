@@ -95,6 +95,9 @@ NICHES = [
     ("football", "Football skills", {"en": ["football skills", "soccer skills"], "de": ["fußball skills", "fussball"], "ja": ["サッカー", "サッカー 技"], "ko": ["축구", "축구 기술"]}),
 ]
 NICHE_BY_ID = {n[0]: n for n in NICHES}
+# a JP / KR channel must title most of its Shorts in that script (region filters of the API are loose)
+MARKET_SCRIPTS = {"ja": re.compile("[぀-ヿ一-鿿]"), "ko": re.compile("[가-힯]")}
+MIN_SCRIPT_SHARE = 0.5
 
 
 class ResearchError(Exception):
@@ -371,9 +374,12 @@ class Research:
         vids = self.yt.videos(list(dict.fromkeys(ids)))
         chans = self.yt.channels([v["channelId"] for v in vids])
         now = _now()
+        region, script = MARKETS[market]["region"], MARKET_SCRIPTS.get(MARKETS[market]["lang"])
         stage1 = [c for c in chans.values() if (now - _parse_time(c["created"])).days <= MAX_AGE_DAYS
-                  and c["subs"] is not None and MIN_SUBS <= c["subs"] <= MAX_SUBS]
-        self.log("info", f"{len(chans)} channels found, {len(stage1)} are ≤24 months old with {MIN_SUBS:,}-{MAX_SUBS:,} subscribers")
+                  and c["subs"] is not None and MIN_SUBS <= c["subs"] <= MAX_SUBS
+                  and (not c["country"] or c["country"] == region)]
+        self.log("info", f"{len(chans)} channels found, {len(stage1)} are ≤24 months old with {MIN_SUBS:,}-{MAX_SUBS:,} "
+                         f"subscribers and not registered in another country")
 
         def enrich(c):
             tail = c["id"][2:]
@@ -384,6 +390,9 @@ class Research:
                 return c
             recent = self.yt.videos(self.yt.playlist_ids("UUSH" + tail, 20))
             c["recent"] = recent
+            if script and recent and sum(bool(script.search(v["title"])) for v in recent) / len(recent) < MIN_SCRIPT_SHARE:
+                c["offMarket"] = True
+                return c
             days = max((now - _parse_time(c["created"])).days, 1)
             last30 = [v for v in recent if (now - _parse_time(v["published"])).days <= 30]
             c["ageDays"] = days
@@ -400,10 +409,12 @@ class Research:
         with ThreadPoolExecutor(max_workers=6) as pool:
             for i, c in enumerate(pool.map(enrich, stage1)):
                 self.progress("channels", f"Checking channels {i + 1}/{len(stage1)}", 0.3 + 0.2 * (i + 1) / max(len(stage1), 1))
-                if c.get("shortsShare", 0) >= MIN_SHORTS_SHARE and c.get("uploads30"):
+                if c.get("shortsShare", 0) >= MIN_SHORTS_SHARE and c.get("uploads30") and not c.get("offMarket"):
                     out.append(c)
         out.sort(key=lambda c: c["score"], reverse=True)
-        self.log("info", f"{len(out)} promising Shorts channels (≥{int(MIN_SHORTS_SHARE * 100)} % Shorts, active in the last 30 days)")
+        off = sum(1 for c in stage1 if c.get("offMarket"))
+        self.log("info", f"{len(out)} promising Shorts channels (≥{int(MIN_SHORTS_SHARE * 100)} % Shorts, active in the last 30 days"
+                         + (f"; {off} dropped for titles not in the market's language" if off else "") + ")")
         return out
 
     def channel_by_url(self, url):
