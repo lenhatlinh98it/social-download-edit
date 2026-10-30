@@ -49,6 +49,8 @@ Finds promising YouTube Shorts channels in a hot niche that are **not on TikTok 
 
 ## Editions and license activation
 
+> **This is the `commercial` branch**: Research and the key generator are not included, and the app needs a license key.
+
 `edition.py` picks the build: **owner** (branch `main`: every feature, never locked, plus a **Keys** tab that makes license keys) or **commercial** (branch `commercial`: no Research tab, no key generator, locked until activated). New features land on `main`; merge `main` into `commercial` to ship them.
 
 The commercial app is locked until it is activated with a key made for that computer:
