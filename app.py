@@ -19,6 +19,7 @@ import editor
 import engine
 import facebook
 import instagram
+import research
 import tiktok
 
 engine.activate()  # must run before yt_dlp is imported
@@ -287,6 +288,9 @@ class Api:
         self._edit_cancel = threading.Event()
         self._notifier = None
         self._fonts = None
+        self._research_lock = threading.Lock()
+        self._research_cancel = threading.Event()
+        self._research_running = False
 
     # ---------- plumbing ----------
     def _emit(self, type_, **data):
@@ -800,6 +804,163 @@ class Api:
     def reveal_file(self, path):
         if path and os.path.isfile(path):
             subprocess.Popen(["explorer", f"/select,{os.path.normpath(path)}"])
+
+    # ---------- niche & channel research ----------
+    @staticmethod
+    def _research_key():
+        """(key, source): the key saved in the app wins over YOUTUBE_API_KEY in the environment / a .env file."""
+        saved = load_settings().get("youtubeApiKey") or ""
+        if saved:
+            return saved, "app"
+        key = research.load_api_key(os.path.dirname(os.path.abspath(sys.argv[0])), os.path.dirname(sys.executable),
+                                    BASE_DIR, facebook.DATA_DIR)
+        return key, ".env" if key else ""
+
+    def _research(self):
+        key = self._research_key()[0]
+
+        def log(level, message, detail=""):
+            self._log(level, "research", message, detail)
+
+        def progress(stage, text, frac=None):
+            self._emit("researchProgress", stage=stage, text=text, value=frac)
+
+        return research.Research(key, facebook.DATA_DIR, self._tools()[0], load_settings().get("ttChromeRoot") or "",
+                                 log, progress, self._research_cancel.is_set)
+
+    def research_state(self, market="US"):
+        try:
+            r = self._research()
+            has_key, quota, niches = True, r.quota(), r.niche_results(market)
+            last = (r.cache.get("runs") or {}).get(market)
+        except research.ResearchError:
+            has_key, quota, niches, last = False, 0, [], None
+        lang = research.MARKETS.get(market, research.MARKETS["US"])["lang"]
+        key, source = self._research_key()
+        return {"markets": list(research.MARKETS), "hasKey": has_key, "quota": quota, "quotaMax": research.DAILY_QUOTA,
+                "keyMasked": f"{key[:4]}…{key[-4:]}" if len(key) > 8 else "", "keySource": source,
+                "niches": niches, "running": self._research_running, "last": last,
+                "catalog": [{"id": n[0], "name": n[1], "keyword": n[2][lang][0]} for n in research.NICHES],
+                "chromeRoot": bool(load_settings().get("ttChromeRoot"))}
+
+    def _start_research(self, name, fn, *args):
+        with self._research_lock:
+            if self._research_running:
+                return {"ok": False, "error": "A research run is already going."}
+            self._research_running = True
+        self._research_cancel.clear()
+
+        def run():
+            try:
+                fn(*args)
+            except research.Cancelled:
+                self._emit("researchDone", kind=name, cancelled=True)
+                self._log("info", "research", "Research cancelled")
+            except Exception as ex:  # noqa: BLE001 - report every failure in the Research tab and the log
+                self._log("error", "research", f"{name}: {ex}", traceback.format_exc())
+                self._emit("researchDone", kind=name, error=str(ex))
+            finally:
+                self._research_running = False
+                self._emit("researchQuota", quota=self._research().quota() if self._has_research_key() else 0)
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True}
+
+    def _has_research_key(self):
+        try:
+            self._research()
+            return True
+        except research.ResearchError:
+            return False
+
+    def research_set_key(self, key):
+        """Check the key with one cheap API call (1 unit), then keep it in settings.json."""
+        key = (key or "").strip()
+        if not key:
+            settings = load_settings()
+            settings.pop("youtubeApiKey", None)
+            _write_json(SETTINGS_FILE, settings)
+            self._log("info", "research", "YouTube API key removed from the app")
+            return {"ok": True}
+        if not re.fullmatch(r"[A-Za-z0-9_\-]{30,60}", key):
+            return {"ok": False, "error": "This does not look like a Google API key (it usually starts with “AIza”)."}
+        try:
+            research.YouTube(key, lambda _units: None).call("channels", part="id", forHandle="@YouTube")
+        except research.ResearchError as ex:
+            return {"ok": False, "error": f"YouTube rejected the key: {ex}"}
+        except OSError as ex:
+            return {"ok": False, "error": f"Could not reach YouTube to check the key: {ex}"}
+        save_setting("youtubeApiKey", key)
+        self._log("success", "research", f"YouTube API key saved ({key[:4]}…{key[-4:]})")
+        return {"ok": True}
+
+    def research_cancel(self):
+        self._research_cancel.set()
+
+    def research_niches(self, market, count=10):
+        if market not in research.MARKETS:
+            return {"ok": False, "error": "Unknown market."}
+        return self._start_research("niches", self._research_niches_task, market, int(count or 10))
+
+    def _research_niches_task(self, market, count):
+        r = self._research()
+        self._log("info", "research", f"Scoring {count} niches for {market}")
+        rows = r.research_niches(market, count)
+        self._emit("researchDone", kind="niches", market=market, niches=rows)
+
+    def research_channels(self, market, niche):
+        """`niche`: a catalog id or a free-text keyword typed by the user."""
+        niche = (niche or "").strip()
+        if market not in research.MARKETS or not niche:
+            return {"ok": False, "error": "Choose a market and a niche."}
+        if not load_settings().get("ttChromeRoot"):
+            return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first (the TikTok check runs in its 'Research' profile)."}
+        return self._start_research("channels", self._research_channels_task, market, niche)
+
+    def _research_channels_task(self, market, niche):
+        r = self._research()
+        lang = research.MARKETS[market]["lang"]
+        entry = research.NICHE_BY_ID.get(niche) or next((n for n in research.NICHES if n[1].lower() == niche.lower()), None)
+        name, keywords = (entry[1], entry[2][lang][:2]) if entry else (niche, [niche])
+        self._log("info", "research", f"Finding Shorts channels for “{name}” in {market}", ", ".join(keywords))
+        found = r.find_channels(market, keywords)
+        candidates = found[:15]
+        if candidates:
+            r.check_tiktok(candidates, stop_after=5)
+        checked = [c for c in candidates if c.get("tiktok")]
+        free = [c for c in checked if c["tiktok"]["verdict"] in ("none", "reup")]
+        free.sort(key=lambda c: (c["tiktok"]["verdict"] != "none", -c["score"]))
+        picks = free[:5]
+        for c in found:  # keep the saved run small: a few example Shorts per checked channel
+            c["recent"] = c.get("recent", [])[:3] if c in candidates else []
+        run = {"market": market, "niche": name, "keywords": keywords, "at": time.strftime("%Y-%m-%d %H:%M"),
+               "found": len(found), "picks": [c["id"] for c in picks],
+               "channels": checked + [c for c in found if c not in candidates][:20]}
+        with r._lock:
+            r.cache.setdefault("runs", {})[market] = run
+            r._save()
+        summary = ", ".join(c["title"] for c in picks) or "none"
+        self._log("success" if picks else "warning", "research",
+                  f"{name} [{market}]: {len(picks)} promising channels not on TikTok", summary)
+        self._emit("researchDone", kind="channels", run=run)
+        self._notify("Research finished", f"{name}: {len(picks)} channels not on TikTok yet")
+
+    def research_check(self, url):
+        if not load_settings().get("ttChromeRoot"):
+            return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first."}
+        return self._start_research("check", self._research_check_task, (url or "").strip())
+
+    def _research_check_task(self, url):
+        r = self._research()
+        c = r.channel_by_url(url)
+        r.check_tiktok([c])
+        c["recent"] = c.get("recent", [])[:3]
+        self._emit("researchDone", kind="check", channel=c)
+
+    def research_open(self, url):
+        host = re.sub(r"^https?://", "", (url or "").lower()).split("/")[0]
+        if host.endswith(("youtube.com", "tiktok.com")) or host == "console.cloud.google.com":
+            webbrowser.open(url)
 
     # ---------- TikTok posting (Chrome Portable profiles) ----------
     def tt_state(self):

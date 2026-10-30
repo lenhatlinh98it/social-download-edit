@@ -8,6 +8,8 @@ const ROW_ICONS = {
   up: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
   down: '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>',
   remove: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  post: '<svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.4-7.5a1 1 0 0 0 0-1.8L3.4 3.6a.99.99 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>',
+  show: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
 };
 
 function fmtDur(t) {
@@ -38,7 +40,9 @@ function rowHtml(item, i, opts) {
     <span class="fidx">${i + 1}</span>
     <div class="finfo"><span class="fname">${esc(item.name)}</span><span class="fmeta mono">${meta}</span></div>
     ${state}
-    <div class="factions">${move}<button class="icon-btn" data-a="remove" title="Remove">${ROW_ICONS.remove}</button></div>
+    <div class="factions">${opts.post && item.state === "done" && item.output
+      ? `<button class="icon-btn" data-a="post" title="Post the exported video to TikTok">${ROW_ICONS.post}</button>
+      <button class="icon-btn" data-a="show" title="Show the exported file">${ROW_ICONS.show}</button>` : ""}${move}<button class="icon-btn" data-a="remove" title="Remove">${ROW_ICONS.remove}</button></div>
     <i class="rowbar" style="width:${item.state === "working" ? item.pct || 0 : item.state === "done" ? 100 : 0}%"></i>
   </div>`;
 }
@@ -59,7 +63,7 @@ async function probeAndAdd(list, paths) {
 function renderBatch() {
   const list = $("#batchList");
   list.innerHTML = batch.items.length
-    ? batch.items.map((it, i) => rowHtml(it, i, { reorder: false })).join("")
+    ? batch.items.map((it, i) => rowHtml(it, i, { reorder: false, post: true })).join("")
     : emptyHtml("Add the videos to edit", "Use “Add videos…” or drop video files here. Each one gets the preset you choose.");
   $("#batchCount").textContent = `${batch.items.length} video${batch.items.length === 1 ? "" : "s"}`;
   $("#batchDir").textContent = batch.dir ? batch.dir : "";
@@ -89,7 +93,11 @@ $("#batchClear").addEventListener("click", () => { if (!batch.running) { batch.i
 $("#batchPreset").addEventListener("change", renderBatch);
 $("#batchList").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-a]");
-  if (!btn || batch.running) return;
+  if (!btn) return;
+  const item = batch.items[Number(btn.closest(".file-row").dataset.i)];
+  if (btn.dataset.a === "post") { window.postExported(item.output); return; }
+  if (btn.dataset.a === "show") { api.reveal_file(item.output); return; }
+  if (batch.running) return;
   batch.items.splice(Number(btn.closest(".file-row").dataset.i), 1);
   renderBatch();
 });
@@ -170,6 +178,11 @@ $("#mergeList").addEventListener("click", (e) => {
   else if (btn.dataset.a === "down" && i < items.length - 1) [items[i + 1], items[i]] = [items[i], items[i + 1]];
   renderMerge();
 });
+$("#mergePostTT").addEventListener("click", () => {
+  if (mergeState.lastOutput) window.postExported(mergeState.lastOutput.path, mergeState.lastOutput.name);
+});
+$("#mergeShowFile").addEventListener("click", () => { if (mergeState.lastOutput) api.reveal_file(mergeState.lastOutput.path); });
+
 $("#mergeStart").addEventListener("click", async () => {
   const items = mergeState.items.filter((x) => x.ok);
   const opts = { size: mergeState.size, fit: mergeState.fit, transition: Number($("#mergeTrans").value),
@@ -187,7 +200,7 @@ Object.assign(handlers, {
   batchItem: (e) => {
     const it = batch.items[e.index];
     if (!it) return;
-    Object.assign(it, { state: e.state, pct: e.pct, error: e.error || it.error });
+    Object.assign(it, { state: e.state, pct: e.pct, error: e.error || it.error, output: e.output || it.output });
     const done = batch.items.filter((x) => ["done", "failed", "cancelled"].includes(x.state)).length;
     const working = batch.items.find((x) => x.state === "working");
     $("#batchStatus").textContent = `Processing ${done}/${batch.items.length}${working ? ` · ${working.name}` : ""}`;
@@ -200,7 +213,8 @@ Object.assign(handlers, {
     $("#batchFill").style.width = "100%";
     renderBatch();
     if (e.failed.length) toast("error", `Batch: ${e.ok}/${e.total} exported`, e.failed.join("\n"));
-    else toast("success", `Batch finished: ${e.ok}/${e.total} exported`, e.cancelled ? "Cancelled before the end." : "Saved next to the originals or in the chosen folder.");
+    else toast("success", `Batch finished: ${e.ok}/${e.total} exported`, e.cancelled ? "Cancelled before the end."
+      : "Saved next to the originals or in the chosen folder. Use ✈ on a row to post it to TikTok.");
   },
   mergeProgress: (e) => {
     $("#mergeTrack").classList.toggle("indeterminate", e.value === null);
@@ -218,7 +232,12 @@ Object.assign(handlers, {
     } else {
       $("#mergeStatus").textContent = `Saved ${e.width}×${e.height} · ${fmtDur(e.duration)} · ${e.encoder}`;
       $("#mergeFill").style.width = "100%";
-      toast("success", "Merge finished", e.name, { label: "Show file", run: () => api.reveal_file(e.path) });
+      mergeState.lastOutput = { path: e.path, name: e.name };
+      $("#mergeDoneName").textContent = e.name;
+      $("#mergeDoneName").title = e.path;
+      $("#mergeDone").hidden = false;
+      $("#mergeDone").scrollIntoView({ block: "nearest", behavior: "smooth" });
+      toast("success", "Merge finished", e.name, { label: "Post to TikTok", run: () => window.postExported(e.path, e.name) });
     }
     renderMerge();
   },

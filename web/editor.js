@@ -878,6 +878,19 @@ document.addEventListener("keydown", (e) => {
 new ResizeObserver(kick).observe($("#view-editor"));
 
 /* ---------- open / export ---------- */
+// caption suggestion: the exported file name without the extension and the " (edited)" suffix
+function postExported(path, name) {
+  const base = (name || path.split(/[\\/]/).pop()).replace(/\.[^.]+$/, "");
+  openPostDialog(path, base.replace(/\s*\(edited\)(\s*\(\d+\))?$/, ""));
+}
+window.postExported = postExported;
+
+function postLastExport() {
+  if (ed.lastExport) postExported(ed.lastExport.path, ed.lastExport.name);
+}
+$("#edPostTT").addEventListener("click", postLastExport);
+$("#edShowFile").addEventListener("click", () => { if (ed.lastExport) api.reveal_file(ed.lastExport.path); });
+
 async function openInEditor(path) {
   setView("editor");
   const res = await api.editor_open(path || null);
@@ -1184,7 +1197,12 @@ Object.assign(handlers, {
     ed.exporting = false;
     setEdStatus(`Saved ${e.width}×${e.height} · ${e.encoder}`, 1);
     syncPanel();
-    toast("success", "Export finished", e.name, { label: "Show file", run: () => api.reveal_file(e.path) });
+    ed.lastExport = { path: e.path, name: e.name };
+    $("#edDoneName").textContent = e.name;
+    $("#edDoneName").title = e.path;
+    $("#edDone").hidden = false;
+    $("#edDone").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    toast("success", "Export finished", e.name, { label: "Post to TikTok", run: postLastExport });
   },
   editCancelled: () => {
     ed.exporting = false;
