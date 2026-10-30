@@ -884,6 +884,8 @@ class Api:
                                  log, progress, self._research_cancel.is_set)
 
     def research_state(self, market="US"):
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         try:
             r = self._research()
             has_key, quota, niches = True, r.quota(), r.niche_results(market)
@@ -933,6 +935,8 @@ class Api:
 
     def research_set_key(self, key):
         """Check the key with one cheap API call (1 unit), then keep it in settings.json."""
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         key = (key or "").strip()
         if not key:
             settings = load_settings()
@@ -956,6 +960,8 @@ class Api:
         self._research_cancel.set()
 
     def research_niches(self, market, count=10):
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         if market not in research.MARKETS:
             return {"ok": False, "error": "Unknown market."}
         return self._start_research("niches", self._research_niches_task, market, int(count or 10))
@@ -968,6 +974,8 @@ class Api:
 
     def research_channels(self, market, niche):
         """`niche`: a catalog id or a free-text keyword typed by the user."""
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         niche = (niche or "").strip()
         if market not in research.MARKETS or not niche:
             return {"ok": False, "error": "Choose a market and a niche."}
@@ -1004,6 +1012,8 @@ class Api:
         self._notify("Research finished", f"{name}: {len(picks)} channels not on TikTok yet")
 
     def research_check(self, url):
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         if not load_settings().get("ttChromeRoot"):
             return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first."}
         return self._start_research("check", self._research_check_task, (url or "").strip())
