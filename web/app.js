@@ -87,7 +87,7 @@ function setView(view) {
   state.view = view;
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${view}`));
-  $("#dock").classList.toggle("hidden", ["saved", "downloaded", "tiktok", "research", "logs", "editor"].includes(view));
+  $("#dock").classList.toggle("hidden", ["saved", "downloaded", "tiktok", "research", "keys", "logs", "editor"].includes(view));
   window.onEditorView?.(view === "editor");
   movePill();
   updateCounts();
@@ -97,6 +97,7 @@ function setView(view) {
   if (view === "tiktok") loadTT();
   if (view === "logs") loadLogs();
   if (view === "research") window.loadResearch?.();
+  if (view === "keys") window.loadKeys?.();
 }
 
 function movePill() {
@@ -835,6 +836,7 @@ const handlers = {
     bar.classList.toggle("on", e.state === "downloading");
     $("i", bar).style.width = `${e.pct}%`;
   },
+  licenseRequired: async () => showLicense(await api.license_info()),
   log: (e) => {
     logs.items.unshift(e.entry);
     if (state.view === "logs") renderLogs();
@@ -874,9 +876,43 @@ window.addEventListener("resize", movePill);
 document.fonts?.ready.then(movePill);
 setView("youtube");
 
+/* ---------- license ---------- */
+function showLicense(info) {
+  $("#licMachine").textContent = info.machine;
+  $("#licError").textContent = info.reason || "";
+  $("#licModal").hidden = false;
+  $("#licKey").focus();
+}
+
+$("#licCopy").addEventListener("click", async () => {
+  const text = $("#licMachine").textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents($("#licMachine"));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    document.execCommand("copy");
+  }
+  toast("success", "Machine ID copied", text);
+});
+$("#licForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const key = $("#licKey").value.trim();
+  if (!key) { $("#licError").textContent = "Paste your license key."; return; }
+  const res = await api.license_activate(key);
+  if (!res.ok) { $("#licError").textContent = res.reason; return; }
+  $("#licModal").hidden = true;
+  toast("success", "Grabber activated", "Thank you! This computer is now licensed.");
+});
+
 window.addEventListener("pywebviewready", async () => {
   api = window.pywebview.api;
   const init = await api.init();
+  if (init.edition !== "owner") $$(".owner-only").forEach((el) => el.remove());
+  movePill();
+  if (!init.license.ok) showLicense(init.license);
   state.dir = init.dir;
   state.saved = init.saved;
   state.fbLoggedIn = init.fbLoggedIn;

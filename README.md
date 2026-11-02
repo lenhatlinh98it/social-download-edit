@@ -47,6 +47,18 @@ Finds promising YouTube Shorts channels in a hot niche that are **not on TikTok 
 
 **Check on TikTok** runs step 3 for a single YouTube channel link. If TikTok shows a captcha, solve it in the Chrome window; the run waits.
 
+## Editions and license activation
+
+`edition.py` picks the build: **owner** (branch `main`: every feature, never locked, plus a **Keys** tab that makes license keys) or **commercial** (branch `commercial`: no Research tab, no key generator, locked until activated). New features land on `main`; merge `main` into `commercial` to ship them.
+
+The commercial app is locked until it is activated with a key made for that computer:
+
+1. The buyer opens Grabber and sends you the **Machine ID** shown on the activation screen (with the payment).
+2. You make the key in the **Keys** tab of the owner app (or `tools\keygen.bat` / `python tools/keygen.py issue <MACHINE-ID> --note "name"`): the key is printed, copied to the clipboard and listed in `%USERPROFILE%\.grabber-keygen\issued.csv`.
+3. The buyer pastes the key → activated. The key only works on that machine (Ed25519-signed Machine ID + issue date), so sharing it does nothing. Lifetime by default; `--days N` makes a key that expires.
+
+The signing key is `%USERPROFILE%\.grabber-keygen\private.key` — **outside the repo, back it up and never share it**. `python tools/keygen.py init` creates it once and prints the public key embedded in `license.py`. `tools/` is not bundled into the exe. A reinstall of Windows changes the Machine ID: issue a new key.
+
 ## Logs
 
 The **Logs** tab records fetches, downloads, exports and every TikTok posting step (with error details) in `logs.jsonl`, filterable by source or errors only.
@@ -94,6 +106,9 @@ Output is `dist\Grabber\` (includes ffmpeg if `bin\` is present). The Desktop sh
 | `facebook.py` / `douyin.py` / `instagram.py` | Listing videos with Playwright |
 | `tiktok.py` | Posting through Chrome Portable profiles (CDP) |
 | `research.py` | Niche scoring, Shorts channel search and TikTok existence check |
+| `license.py` / `ed25519.py` | Machine ID and license key check (pure-Python Ed25519) |
+| `edition.py` | owner / commercial build switch |
+| `keygen.py`, `tools/keygen.py` | Seller-only license key generator (Keys tab + command line) |
 | `engine.py` | Update yt-dlp from PyPI from inside the app |
 | `build.py` | Package the `.exe` with PyInstaller |
 | `tools/make_icon.py` | Regenerate the icon (needs Pillow) |

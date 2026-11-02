@@ -334,6 +334,15 @@ input:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 0 0 4px rgba(139,
 .rs-ev { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
 .rs-others { margin: 4px 6px; display: flex; flex-direction: column; gap: 8px; }
 .rs-others[open] { gap: 8px; }
+.key-days { width: 120px; height: 34px; }
+.key-result { padding: 12px 14px; border-radius: var(--r-lg); display: flex; flex-direction: column; gap: 8px; }
+.key-result-head { display: flex; align-items: center; gap: 10px; }
+.key-result-head b { flex: 1; }
+#keyResultText, .key-row .mono.key { font-family: "JetBrains Mono", monospace; font-size: 12px; word-break: break-all; }
+.key-row { display: grid; grid-template-columns: 96px 170px minmax(0, 1fr) 80px; gap: 10px; align-items: center; padding: 8px 12px;
+  border-radius: 12px; background: var(--glass); border: 1px solid var(--stroke); font-size: 12.5px; }
+.key-row .mono { color: var(--muted); }
+.key-row .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-row { display: grid; grid-template-columns: 150px 72px 76px minmax(0, 1fr); gap: 10px; align-items: start; padding: 8px 12px;
   border-radius: 12px; background: var(--glass); border: 1px solid var(--stroke); font-size: 12.5px; content-visibility: auto; contain-intrinsic-size: auto 40px; }
 .log-row .mono { color: var(--muted); font-size: 11.5px; padding-top: 2px; }
@@ -353,6 +362,12 @@ input:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 0 0 4px rgba(139,
 .modal-card { width: min(520px, 100%); max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 22px; border-radius: var(--r-lg);
   background: rgba(20, 20, 45, .92); animation: viewIn .25s var(--ease); }
 .modal-card h3 { margin: 0; font-size: 17px; }
+.modal.lic { z-index: 60; background: rgba(4,4,16,.92); }
+.lic-text { margin: 0; font-size: 13px; line-height: 1.5; }
+.lic-machine { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 12px; background: rgba(0,0,0,.3);
+  border: 1px solid var(--stroke); }
+.lic-machine .mono { flex: 1; font-size: 18px; letter-spacing: .08em; user-select: all; }
+#licKey { font-family: "JetBrains Mono", monospace; font-size: 12px; word-break: break-all; }
 .modal-card .field { width: 100%; }
 .tt-file { font-size: 12px; color: var(--muted); word-break: break-all; }
 .tt-when { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
@@ -578,6 +593,9 @@ select:focus, textarea:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 
 
 @media (max-width: 1460px) {
   .tab svg { display: none; }
+}
+@media (max-width: 1180px) {
+  .tab { padding: 0 7px; font-size: 12.5px; }
 }
 @media (max-width: 1000px) {
   .brand-sub, .sys { display: none; }

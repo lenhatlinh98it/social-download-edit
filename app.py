@@ -19,8 +19,15 @@ import editor
 import engine
 import facebook
 import instagram
-import research
+import edition
+import license
 import tiktok
+
+try:  # owner edition only - the commercial branch ships without these modules
+    import keygen
+    import research
+except ImportError:
+    keygen = research = None
 
 engine.activate()  # must run before yt_dlp is imported
 import yt_dlp  # noqa: E402
@@ -39,6 +46,8 @@ SETTINGS_FILE = os.path.join(facebook.DATA_DIR, "settings.json")
 PRESETS_FILE = os.path.join(facebook.DATA_DIR, "edit_presets.json")
 TT_POSTS_FILE = os.path.join(facebook.DATA_DIR, "tiktok_posts.json")
 LOG_FILE = os.path.join(facebook.DATA_DIR, "logs.jsonl")
+LICENSE_FILE = os.path.join(facebook.DATA_DIR, "license.key")
+OWNER = edition.EDITION == "owner"
 LOG_MAX_BYTES = 2_000_000
 LOG_EVENTS = {"list", "done", "editDone", "batchDone", "stripDone", "mergeDone", "fbExpired",
               "dyLoginRequired", "igLoginRequired"}
@@ -291,6 +300,7 @@ class Api:
         self._research_lock = threading.Lock()
         self._research_cancel = threading.Event()
         self._research_running = False
+        self._license = {"ok": True} if OWNER else license.load(LICENSE_FILE)
 
     # ---------- plumbing ----------
     def _emit(self, type_, **data):
@@ -304,6 +314,9 @@ class Api:
 
     def _run(self, target, *args):
         """Start a background task unless another one is running."""
+        if not self._license["ok"]:
+            self._emit("licenseRequired")
+            return False
         with self._lock:
             if self._busy:
                 return False
@@ -373,9 +386,51 @@ class Api:
             self.reveal_file(LOG_FILE)
 
     # ---------- state ----------
+    # ---------- license ----------
+    def license_info(self):
+        lic = self._license
+        return {"ok": lic["ok"], "machine": license.machine_id(), "reason": lic.get("reason", ""),
+                "issued": lic.get("issued", ""), "expires": lic.get("expires", ""), "edition": edition.EDITION}
+
+    def license_activate(self, key):
+        result = license.check(key)
+        if not result["ok"]:
+            self._log("warning", "app", f"License activation failed: {result['reason']}")
+            return {**self.license_info(), "ok": False, "reason": result["reason"]}
+        license.save(LICENSE_FILE, key)
+        self._license = {**result, "key": key.strip()}
+        self._log("success", "app", f"Grabber activated on {license.machine_id()}")
+        return self.license_info()
+
+    # ---------- license keys (owner edition) ----------
+    def keys_state(self):
+        if not keygen:
+            return {"available": False}
+        return {"available": True, **keygen.status(), "issued": keygen.issued(), "machine": license.machine_id()}
+
+    def keys_init(self):
+        if not keygen:
+            return {"ok": False, "error": "Not available in this edition."}
+        pub = keygen.init()
+        self._log("info", "app", "License signing key ready", keygen.PRIVATE)
+        return {"ok": True, "publicKey": pub, **self.keys_state()}
+
+    def keys_issue(self, machine, days=0, note=""):
+        if not keygen:
+            return {"ok": False, "error": "Not available in this edition."}
+        try:
+            key = keygen.issue(machine, int(days or 0), (note or "").strip())
+        except keygen.KeygenError as ex:
+            return {"ok": False, "error": str(ex)}
+        self._log("success", "app", f"License key issued for {license.machine_id(license.parse_machine_id(machine))}"
+                                    + (f" — {note.strip()}" if (note or "").strip() else ""))
+        return {"ok": True, "key": key, "issued": keygen.issued()}
+
     def init(self):
         threading.Thread(target=self._check_engine, daemon=True).start()
         return {
+            "edition": edition.EDITION,
+            "license": self.license_info(),
             "saved": load_saved(),
             "fbLoggedIn": facebook.is_logged_in(),
             "dyLoggedIn": douyin.is_logged_in(),
@@ -829,6 +884,8 @@ class Api:
                                  log, progress, self._research_cancel.is_set)
 
     def research_state(self, market="US"):
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         try:
             r = self._research()
             has_key, quota, niches = True, r.quota(), r.niche_results(market)
@@ -844,6 +901,9 @@ class Api:
                 "chromeRoot": bool(load_settings().get("ttChromeRoot"))}
 
     def _start_research(self, name, fn, *args):
+        if not self._license["ok"]:
+            self._emit("licenseRequired")
+            return {"ok": False, "error": "Activate Grabber first."}
         with self._research_lock:
             if self._research_running:
                 return {"ok": False, "error": "A research run is already going."}
@@ -875,6 +935,8 @@ class Api:
 
     def research_set_key(self, key):
         """Check the key with one cheap API call (1 unit), then keep it in settings.json."""
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         key = (key or "").strip()
         if not key:
             settings = load_settings()
@@ -898,6 +960,8 @@ class Api:
         self._research_cancel.set()
 
     def research_niches(self, market, count=10):
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         if market not in research.MARKETS:
             return {"ok": False, "error": "Unknown market."}
         return self._start_research("niches", self._research_niches_task, market, int(count or 10))
@@ -910,6 +974,8 @@ class Api:
 
     def research_channels(self, market, niche):
         """`niche`: a catalog id or a free-text keyword typed by the user."""
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         niche = (niche or "").strip()
         if market not in research.MARKETS or not niche:
             return {"ok": False, "error": "Choose a market and a niche."}
@@ -946,6 +1012,8 @@ class Api:
         self._notify("Research finished", f"{name}: {len(picks)} channels not on TikTok yet")
 
     def research_check(self, url):
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
         if not load_settings().get("ttChromeRoot"):
             return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first."}
         return self._start_research("check", self._research_check_task, (url or "").strip())
