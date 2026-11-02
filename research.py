@@ -98,6 +98,19 @@ NICHE_BY_ID = {n[0]: n for n in NICHES}
 # a JP / KR channel must title most of its Shorts in that script (region filters of the API are loose)
 MARKET_SCRIPTS = {"ja": re.compile("[぀-ヿ一-鿿]"), "ko": re.compile("[가-힯]")}
 MIN_SCRIPT_SHARE = 0.5
+MIN_LANG_SHARE = 0.5   # of a channel's recent Shorts in the market's language
+MIN_TOPIC_SHARE = 0.4  # of a channel's recent Shorts about the niche
+# small word lists to tell apart the languages that show up in Latin-script searches (titles rarely set a language)
+LANG_WORDS = {
+    "en": set("the and to of in is this how my with for you your it on what why best when from this that".split()),
+    "de": set("der die das und ist mit ich nicht wie ein eine zu auf für den dem wird so auto".split()),
+    "ms": set("yang dan ini untuk dengan tidak saya kereta cara di ke dari ada boleh mobil cuci bersih jadi".split()),
+    "es": set("el la los las que y en un una por para con cómo del lo coche limpieza".split()),
+    "pt": set("o os as que e em um uma para com como não do da carro limpeza".split()),
+    "fr": set("le la les des et un une pour avec comment est du voiture nettoyage".split()),
+    "hi": set("hai ka ki ke ko se aur kya kaise mein yeh wala bhai".split()),
+}
+TOPIC_STOPWORDS = set("the and for with how best easy quick tips video videos shorts ideas".split())
 
 
 class ResearchError(Exception):
@@ -155,6 +168,53 @@ def similarity(a, b):
     if a in b or b in a:
         return max(0.8, difflib.SequenceMatcher(None, a, b).ratio())
     return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def guess_lang(text):
+    """Best language of a Latin-script title by common words, or "" when unsure."""
+    words = set(re.findall(r"[a-zäöüßáéíóúñçãõâêôàèùì]+", (text or "").casefold()))
+    hits = {lang: len(words & vocab) for lang, vocab in LANG_WORDS.items()}
+    best = max(hits, key=hits.get)
+    return best if hits[best] and list(hits.values()).count(hits[best]) == 1 else ""
+
+
+def language_ok(recent, lang):
+    """Most recent Shorts are in `lang`: by YouTube's language tag, else script (ja/ko), else common words."""
+    if not recent:
+        return True
+    codes = [v["lang"] for v in recent if v.get("lang")]
+    if len(codes) >= 3:
+        return sum(c == lang for c in codes) / len(codes) >= MIN_LANG_SHARE
+    script = MARKET_SCRIPTS.get(lang)
+    if script:
+        return sum(bool(script.search(v["title"])) for v in recent) / len(recent) >= MIN_SCRIPT_SHARE
+    guesses = [g for g in (guess_lang(f"{v['title']} {v['description'][:200]}") for v in recent) if g]
+    return not guesses or sum(g == lang for g in guesses) / len(guesses) >= MIN_LANG_SHARE
+
+
+def topic_pattern(keywords):
+    """Regex matching any meaningful word of the niche keywords (word prefixes, so clean ~ cleaning / cleaner)."""
+    parts = set()
+    for k in keywords:
+        k = unicodedata.normalize("NFKC", k or "").casefold().strip()
+        if not k:
+            continue
+        if not k.isascii():
+            parts.update(re.escape(w) for w in k.split())  # レシピ, 세차: plain substrings
+            continue
+        for w in re.findall(r"[a-z0-9äöüß]+", k):
+            if len(w) < 3 or w in TOPIC_STOPWORDS:
+                continue
+            # short words whole (car, cars - not cardboard), longer ones by prefix (clean ~ cleaning / cleaner)
+            parts.add(r"\b" + re.escape(w) + r"s?\b" if len(w) <= 4 else r"\b" + re.escape(w[:5]))
+    return re.compile("|".join(sorted(parts)), re.I) if parts else None
+
+
+def topic_share(recent, pattern):
+    if not pattern or not recent:
+        return 1.0
+    hits = sum(bool(pattern.search(f"{v['title']} {' '.join(v.get('tags', []))} {v['description'][:300]}")) for v in recent)
+    return hits / len(recent)
 
 
 def clean_title(t):
@@ -240,6 +300,8 @@ class YouTube:
                     "published": sn["publishedAt"], "views": int(st.get("viewCount", 0)),
                     "seconds": iso_seconds(it["contentDetails"].get("duration")),
                     "thumb": (sn.get("thumbnails", {}).get("high") or sn.get("thumbnails", {}).get("default") or {}).get("url", ""),
+                    "lang": (sn.get("defaultAudioLanguage") or sn.get("defaultLanguage") or "").split("-")[0].lower(),
+                    "tags": sn.get("tags", [])[:30],
                 })
         return out
 
@@ -364,7 +426,9 @@ class Research:
         return row
 
     # ---- 2. channels
-    def find_channels(self, market, keywords):
+    def find_channels(self, market, keywords, topic_words=()):
+        """`topic_words`: words that define the niche (keywords + its name); channels must be mostly about them."""
+        topic = topic_pattern([*keywords, *topic_words])
         ids = []
         for i, q in enumerate(keywords):
             self._check_cancel()
@@ -374,7 +438,7 @@ class Research:
         vids = self.yt.videos(list(dict.fromkeys(ids)))
         chans = self.yt.channels([v["channelId"] for v in vids])
         now = _now()
-        region, script = MARKETS[market]["region"], MARKET_SCRIPTS.get(MARKETS[market]["lang"])
+        region, lang = MARKETS[market]["region"], MARKETS[market]["lang"]
         stage1 = [c for c in chans.values() if (now - _parse_time(c["created"])).days <= MAX_AGE_DAYS
                   and c["subs"] is not None and MIN_SUBS <= c["subs"] <= MAX_SUBS
                   and (not c["country"] or c["country"] == region)]
@@ -390,8 +454,12 @@ class Research:
                 return c
             recent = self.yt.videos(self.yt.playlist_ids("UUSH" + tail, 20))
             c["recent"] = recent
-            if script and recent and sum(bool(script.search(v["title"])) for v in recent) / len(recent) < MIN_SCRIPT_SHARE:
-                c["offMarket"] = True
+            if not language_ok(recent, lang):
+                c["offMarket"] = "language"
+                return c
+            c["topicShare"] = round(topic_share(recent, topic), 2)
+            if c["topicShare"] < MIN_TOPIC_SHARE:
+                c["offMarket"] = "topic"
                 return c
             days = max((now - _parse_time(c["created"])).days, 1)
             last30 = [v for v in recent if (now - _parse_time(v["published"])).days <= 30]
@@ -412,9 +480,10 @@ class Research:
                 if c.get("shortsShare", 0) >= MIN_SHORTS_SHARE and c.get("uploads30") and not c.get("offMarket"):
                     out.append(c)
         out.sort(key=lambda c: c["score"], reverse=True)
-        off = sum(1 for c in stage1 if c.get("offMarket"))
+        off_lang = sum(1 for c in stage1 if c.get("offMarket") == "language")
+        off_topic = sum(1 for c in stage1 if c.get("offMarket") == "topic")
         self.log("info", f"{len(out)} promising Shorts channels (≥{int(MIN_SHORTS_SHARE * 100)} % Shorts, active in the last 30 days"
-                         + (f"; {off} dropped for titles not in the market's language" if off else "") + ")")
+                         f"; dropped {off_lang} not in the market's language and {off_topic} mostly about other topics)")
         return out
 
     def channel_by_url(self, url):
