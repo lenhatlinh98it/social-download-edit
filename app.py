@@ -986,10 +986,13 @@ class Api:
     def _research_channels_task(self, market, niche):
         r = self._research()
         lang = research.MARKETS[market]["lang"]
-        entry = research.NICHE_BY_ID.get(niche) or next((n for n in research.NICHES if n[1].lower() == niche.lower()), None)
+        typed = niche.casefold()
+        entry = research.NICHE_BY_ID.get(niche) or next(
+            (n for n in research.NICHES if typed == n[1].casefold() or any(typed == k.casefold() for ks in n[2].values() for k in ks)), None)
         name, keywords = (entry[1], entry[2][lang][:2]) if entry else (niche, [niche])
+        topic_words = [name, *keywords, *(entry[2]["en"] if entry else [])]
         self._log("info", "research", f"Finding Shorts channels for “{name}” in {market}", ", ".join(keywords))
-        found = r.find_channels(market, keywords)
+        found = r.find_channels(market, keywords, topic_words)
         candidates = found[:15]
         if candidates:
             r.check_tiktok(candidates, stop_after=5)
@@ -1096,7 +1099,8 @@ class Api:
                   "at": time.strftime("%Y-%m-%d %H:%M"), "when": when.strftime("%Y-%m-%d %H:%M") if when else "",
                   "status": "", "error": ""}
         try:
-            country = tiktok.post(root, profile["dir"], file, caption, when, profile["country"], review, status)
+            country = tiktok.post(root, profile["dir"], file, caption, when, profile["country"], review, status,
+                                  shots_dir=os.path.join(facebook.DATA_DIR, "tiktok-errors"))
             record["status"] = "review" if review else "posted"
             record["country"] = country
         except (tiktok.PostError, tiktok.ChromeBusy) as ex:

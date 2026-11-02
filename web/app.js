@@ -856,6 +856,12 @@ const handlers = {
     if (e.failed.length) toast("error", `${e.ok}/${e.total} downloaded`, e.failed.join("\n"), action);
     else if (e.cancelled) toast("info", `Cancelled — ${e.ok}/${e.total} downloaded`, e.dir, action);
     else toast("success", `Downloaded ${e.total} video${e.total > 1 ? "s" : ""}`, e.dir, action);
+    // HTTP 403 from YouTube almost always means the yt-dlp engine is out of date
+    if (e.failed.some((f) => /HTTP Error 403/.test(f)) && !state.engine.installed) {
+      toast("info", "YouTube refused some downloads (HTTP 403)",
+        "The download engine (yt-dlp) is probably out of date. Update it, restart Grabber and download again.",
+        { label: "Update yt-dlp", run: engineClick });
+    }
   },
 };
 window.onPy = (e) => handlers[e.type]?.(e);
