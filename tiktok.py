@@ -272,16 +272,53 @@ def post(root, profile_dir, video, caption, when=None, expected_country="", revi
         try:
             return _post_steps(page, video, caption, when, expected_country, review, status, stage)
         except Exception as ex:  # noqa: BLE001 - add where it failed and what TikTok showed, then re-raise as PostError
-            shot, notices = _diagnose(page, shots_dir, profile_dir, step)
-            detail = str(ex).strip().splitlines()[0] if str(ex).strip() else type(ex).__name__
-            msg = f"Failed while {step}: {detail}"
-            if notices:
-                msg += " | TikTok shows: " + " / ".join(notices)
-            if shot:
-                msg += f" | Screenshot: {shot}"
-            raise PostError(msg) from ex
+            raise PostError(_failure(page, shots_dir, profile_dir, step, ex)) from ex
         finally:
             browser.close()  # only disconnects; Chrome stays open
+
+
+def post_many(root, profile_dir, jobs, expected_country="", review=False, status=lambda _t: None, shots_dir=None,
+              on_item=lambda _i, _error: None):
+    """Upload several videos to one profile: the VPN is checked once, then each job ({"video", "caption", "when"})
+    gets its own tab, one after another. A failed job is reported through on_item(index, error) and the next one
+    goes on; on_item(index, None) means that job is posted (or filled in, with `review`). Returns the exit country."""
+    with sync_playwright() as p:
+        status("Opening the Chrome profile…")
+        browser, page = _open_profile_page(p, root, profile_dir)
+        try:
+            page.bring_to_front()
+            country = _wait_vpn(page, expected_country, status)
+            context = page.context  # the first tab closes once its video is posted
+            for i, job in enumerate(jobs):
+                tab = page if i == 0 else context.new_page()
+                tab.bring_to_front()
+                where = {"step": "opening TikTok Studio"}
+
+                def stage(name, text, i=i, where=where):
+                    where["step"] = name
+                    status(f"Video {i + 1}/{len(jobs)}: {text}")
+
+                try:
+                    _upload_steps(tab, job["video"], job["caption"], job.get("when"), review,
+                                  lambda text, i=i: status(f"Video {i + 1}/{len(jobs)}: {text}"), stage)
+                    on_item(i, None)
+                except Exception as ex:  # noqa: BLE001 - one video failing must not stop the others
+                    on_item(i, _failure(tab, shots_dir, profile_dir, where["step"], ex))
+            return country
+        finally:
+            browser.close()  # only disconnects; Chrome and the review tabs stay open
+
+
+def _failure(page, shots_dir, profile_dir, step, ex):
+    """Error text naming the failed step, TikTok's visible messages and a screenshot."""
+    shot, notices = _diagnose(page, shots_dir, profile_dir, step)
+    detail = str(ex).strip().splitlines()[0] if str(ex).strip() else type(ex).__name__
+    msg = f"Failed while {step}: {detail}"
+    if notices:
+        msg += " | TikTok shows: " + " / ".join(notices)
+    if shot:
+        msg += f" | Screenshot: {shot}"
+    return msg
 
 
 def _set_local_file(page, selector, path):
@@ -301,6 +338,11 @@ def _set_local_file(page, selector, path):
 def _post_steps(page, video, caption, when, expected_country, review, status, stage):
     page.bring_to_front()
     country = _wait_vpn(page, expected_country, status)
+    _upload_steps(page, video, caption, when, review, status, stage)
+    return country
+
+
+def _upload_steps(page, video, caption, when, review, status, stage):
     stage("opening TikTok Studio", "Opening TikTok Studio…")
     page.goto(UPLOAD_URL, wait_until="domcontentloaded", timeout=60000)
     try:
@@ -328,9 +370,8 @@ def _post_steps(page, video, caption, when, expected_country, review, status, st
         _set_schedule(page, when)
     if review:
         status("Ready — review it in Chrome and press Post yourself")
-        return country
+        return
     stage("posting", "Posting…")
     page.click('[data-e2e="post_video_button"]')
     _wait_posted(page)
     page.close()  # posted: drop this tab so windows don't pile up; failures stay open to inspect
-    return country

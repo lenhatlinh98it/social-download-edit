@@ -891,37 +891,235 @@ function postLastExport() {
 $("#edPostTT").addEventListener("click", postLastExport);
 $("#edShowFile").addEventListener("click", () => { if (ed.lastExport) api.reveal_file(ed.lastExport.path); });
 
+/* ---------- queue: several videos open at once, one box each; the editor shows the selected box ----------
+   Each box keeps its own edits (an undo-history snapshot), export name and export result. */
+const edq = { items: [], index: -1, exporting: false };
+
+function queueItem(res, title = "") {
+  return { path: res.path, name: res.name, title, url: res.url, info: res.info, outName: res.suggestedName, strip: true,
+    snap: null, base: null, hist: null, thumb: "", status: "", pct: 0, output: null, error: "" };
+}
+
 async function openInEditor(path) {
-  setView("editor");
   const res = await api.editor_open(path || null);
   if (!res.ok) {
     if (!res.cancelled) toast("error", "Can't open video", res.error);
     return;
   }
-  video.pause();
-  Object.assign(ed, { loaded: true, path: res.path, info: res.info });
-  $("#edName").textContent = res.name;
-  $("#edName").title = res.path;
-  const i = res.info;
-  $("#edMeta").textContent = `${i.width}×${i.height} · ${i.vcodec}${i.acodec ? " + " + i.acodec : ""} · ${fmt(i.duration)} · ${(i.size / 1048576).toFixed(1)} MB`;
-  $("#edOutName").value = res.suggestedName;
-  $("#edEmpty").classList.remove("on");
-  $(".ed-panes").classList.add("on");
-  $(".ed-transport").classList.add("on");
+  setView("editor");
+  await startQueue([queueItem(res)]);
+}
+window.openInEditor = openInEditor;
+
+/* `videos`: file paths, or {file, title} (the title becomes the TikTok caption suggestion) */
+async function openQueue(videos) {
+  if (!videos.length) return;
+  setView("editor");
+  window.setEditorMode?.("edit");
+  const items = [];
+  for (const v of videos) {
+    const p = v.file || v;
+    const res = await api.editor_open(p);
+    if (res.ok) items.push(queueItem(res, v.title || ""));
+    else toast("error", "Can't open video", `${p.split(/[\\/]/).pop()}: ${res.error}`);
+  }
+  if (items.length) await startQueue(items);
+}
+window.openQueue = openQueue;
+
+async function startQueue(items) {
   if (!fontList.length) {
     fontList = await api.list_fonts();
     $("#txtFont").innerHTML = fontList.map((f) => `<option value="${esc(f.path)}">${esc(f.name)}</option>`).join("");
     defaultFontPath = (fontList.find((f) => f.name === "Arial Bold") || fontList.find((f) => /^Arial/.test(f.name)) || fontList[0] || {}).path || "";
     loadPresets();
   }
-  resetEdits();
   ensureFont(defaultFontPath);
-  video.src = res.url;
-  video.currentTime = 0;
-  setEdStatus("Ready", 0);
-  resetHistory();
+  edq.items = items;
+  edq.index = -1;
+  $("#edDone").hidden = true;
+  selectQueueItem(0);
 }
-window.openInEditor = openInEditor;
+
+/* put the editor's current edits back into its box */
+function saveQueueItem() {
+  const item = edq.items[edq.index];
+  if (!item || !ed.loaded) return;
+  commitNow();
+  item.snap = snapshot();
+  item.hist = { stack: editHistory.stack.slice(), index: editHistory.index };
+  item.outName = $("#edOutName").value;
+  item.strip = $("#edStrip").checked;
+}
+
+function selectQueueItem(i) {
+  if (i === edq.index || !edq.items[i]) return;
+  saveQueueItem();
+  edq.index = i;
+  const item = edq.items[i];
+  video.pause();
+  Object.assign(ed, { loaded: true, path: item.path, info: item.info });
+  $("#edName").textContent = item.name;
+  $("#edName").title = item.path;
+  const inf = item.info;
+  $("#edMeta").textContent = `${inf.width}×${inf.height} · ${inf.vcodec}${inf.acodec ? " + " + inf.acodec : ""} · ${fmt(inf.duration)} · ${(inf.size / 1048576).toFixed(1)} MB`;
+  $("#edOutName").value = item.outName;
+  $("#edStrip").checked = item.strip;
+  $("#edEmpty").classList.remove("on");
+  $(".ed-panes").classList.add("on");
+  $(".ed-transport").classList.add("on");
+  video.src = item.url;
+  video.currentTime = 0;
+  if (item.snap) {
+    restoreSnapshot(item.snap);
+    editHistory.stack = item.hist ? item.hist.stack.slice() : [item.snap];
+    editHistory.index = item.hist ? item.hist.index : 0;
+    $("#edUndo").disabled = editHistory.index <= 0;
+    $("#edRedo").disabled = editHistory.index >= editHistory.stack.length - 1;
+  } else {
+    resetEdits();
+    resetHistory();
+    item.base = snapshot();
+  }
+  item.base = item.base || defaultSnapshot(item);
+  if (!ed.exporting) setEdStatus(item.status === "done" ? `Exported: ${item.output.split(/[\\/]/).pop()}` : "Ready", item.status === "done" ? 1 : 0);
+  renderQueue();
+}
+
+/* run `fn` with the editor state of another box swapped in (no preview change) */
+function withItem(item, fn) {
+  const saved = Object.fromEntries([...HIST_KEYS, "info", "path"].map((k) => [k, ed[k]]));
+  try {
+    Object.assign(ed, { info: item.info, path: item.path });
+    if (item.snap) Object.assign(ed, JSON.parse(item.snap));
+    return fn();
+  } finally {
+    Object.assign(ed, saved);
+  }
+}
+
+function defaultSnapshot(item) {
+  return withItem({ ...item, snap: null }, () => {
+    Object.assign(ed, { rotate: 0, flipH: false, flipV: false, ratio: "original", zoom: 1, panX: 0.5, panY: 0.5,
+      bg: "blur", zoomAnimate: false, zoomEnd: 1.3, zoomEase: true, color: {}, speed: 1, volume: 1, mute: false,
+      fadeIn: 0, fadeOut: 0, music: null, text: null, logo: null, start: 0, end: item.info.duration });
+    fitCrop(ratioValue());
+    return snapshot();
+  });
+}
+
+function itemEdited(item) {
+  return !!item.snap && item.snap !== (item.base || defaultSnapshot(item));
+}
+
+function renderQueue() {
+  const many = edq.items.length > 1;
+  $("#edQueue").hidden = !many;
+  if (!many) return;
+  $("#eqBoxes").innerHTML = edq.items.map((it, i) => {
+    const st = it.status === "working" ? `${it.pct}%` : it.status === "done" ? "Exported" : it.status === "failed" ? "Failed"
+      : it.status === "queued" ? "Waiting" : i === edq.index || itemEdited(it) ? (itemEdited(it) ? "Edited" : "Editing") : "Not edited";
+    return `<button class="eq-box${i === edq.index ? " on" : ""} ${esc(it.status)}${itemEdited(it) ? " edited" : ""}" data-i="${i}"
+        title="${esc(it.error || it.name)}">
+      <span class="eq-thumb">${it.thumb ? `<img src="${it.thumb}" alt="">` : `<b>${i + 1}</b>`}</span>
+      <span class="eq-info"><span class="eq-name">${i + 1}. ${esc(it.name)}</span><span class="eq-st">${st}</span></span>
+      ${it.status === "working" ? `<i class="eq-bar" style="width:${it.pct}%"></i>` : ""}
+    </button>`;
+  }).join("");
+  const done = edq.items.filter((it) => it.status === "done").length;
+  $("#eqNote").textContent = done ? `${done}/${edq.items.length} exported` : `${edq.items.length} videos — click a box to edit it`;
+  $("#eqExportAll").disabled = edq.exporting || state.busy;
+  $("#eqApplyAll").disabled = edq.exporting;
+  $("#eqPostAll").disabled = !done || edq.exporting;
+}
+
+$("#eqBoxes").addEventListener("click", (e) => {
+  const b = e.target.closest(".eq-box");
+  if (b && !ed.exporting) selectQueueItem(Number(b.dataset.i));
+});
+
+/* small thumbnail of a box, taken from the preview once its video shows a frame */
+video.addEventListener("loadeddata", () => {
+  const item = edq.items[edq.index];
+  if (!item || item.thumb || item.path !== ed.path) return;
+  try {
+    const c = document.createElement("canvas");
+    c.width = 54;
+    c.height = 96;
+    const g = c.getContext("2d");
+    const s = Math.max(c.width / video.videoWidth, c.height / video.videoHeight);
+    g.drawImage(video, (c.width - video.videoWidth * s) / 2, (c.height - video.videoHeight * s) / 2, video.videoWidth * s, video.videoHeight * s);
+    item.thumb = c.toDataURL("image/jpeg", 0.7);
+    renderQueue();
+  } catch { /* tainted / not decodable: keep the number */ }
+});
+
+/* copy the current box's edits to every other box: relative crop like a preset, trims stay per video */
+$("#eqApplyAll").addEventListener("click", async () => {
+  if (!ed.loaded || edq.items.length < 2) return;
+  saveQueueItem();
+  const preset = makePreset();
+  const keep = { music: ed.music, logo: ed.logo, bgColor: ed.bgColor };
+  let n = 0;
+  for (const [i, item] of edq.items.entries()) {
+    if (i === edq.index) continue;
+    const res = await api.preset_resolve(preset, item.path);
+    if (!res.ok) { toast("error", `Can't apply to ${item.name}`, res.error); continue; }
+    const sp = res.spec;
+    const own = item.snap ? JSON.parse(item.snap) : { start: 0, end: item.info.duration };
+    const bg = sp.background || "blur";
+    const st = {
+      rotate: sp.rotate || 0, flipH: !!sp.flipH, flipV: !!sp.flipV, ratio: sp.ratio || "original", crop: sp.crop,
+      zoom: sp.zoom ?? 1, panX: sp.panX ?? 0.5, panY: sp.panY ?? 0.5, zoomAnimate: !!sp.zoomAnimate, zoomEnd: sp.zoomEnd ?? 1.3,
+      zoomEase: sp.zoomEase ?? true, bg: bg.startsWith("#") ? "color" : bg, bgColor: bg.startsWith("#") ? bg : keep.bgColor,
+      color: { ...(sp.color || {}) }, speed: sp.speed ?? 1, volume: sp.volume ?? 1, mute: !!sp.mute,
+      fadeIn: sp.fadeIn || 0, fadeOut: sp.fadeOut || 0,
+      music: keep.music ? { ...keep.music } : null,
+      text: ed.text ? { ...ed.text } : null,
+      logo: keep.logo ? { ...keep.logo } : null,
+      start: own.start, end: own.end,
+    };
+    item.base = item.base || defaultSnapshot(item);
+    item.snap = JSON.stringify(Object.fromEntries(HIST_KEYS.map((k) => [k, st[k]])));
+    item.hist = null;
+    item.strip = $("#edStrip").checked;
+    if (item.status === "done") item.status = "";
+    n += 1;
+  }
+  renderQueue();
+  toast("success", `Edits copied to ${n} video${n === 1 ? "" : "s"}`, "Click a box to check or adjust it, then Export all.");
+});
+
+$("#eqExportAll").addEventListener("click", async () => {
+  saveQueueItem();
+  video.pause();
+  const jobs = edq.items.map((item) => ({
+    path: item.path,
+    outName: item.outName,
+    spec: withItem(item, () => {
+      if (!item.snap) Object.assign(ed, JSON.parse(item.base || defaultSnapshot(item)));
+      const spec = editSpec();
+      spec.stripMetadata = item.strip;
+      return spec;
+    }),
+  }));
+  const res = await api.editor_export_many(jobs);
+  if (!res.ok) return toast("error", "Can't export", res.error);
+  edq.exporting = true;
+  ed.exporting = true;
+  edq.items.forEach((it) => Object.assign(it, { status: "queued", pct: 0, output: null, error: "" }));
+  setEdStatus("Starting…", null);
+  syncPanel();
+  renderQueue();
+});
+
+$("#eqPostAll").addEventListener("click", () => {
+  const done = edq.items.filter((it) => it.status === "done" && it.output);
+  window.openPostManyDialog(done.map((it) => ({
+    file: it.output,
+    caption: it.title || it.output.split(/[\\/]/).pop().replace(/\.[^.]+$/, "").replace(/\s*\(edited\)(\s*\(\d+\))?$/, ""),
+  })));
+});
 
 function editSpec() {
   const r = (v) => Math.round(v);
@@ -1133,7 +1331,7 @@ handlers.filesDropped = async (e) => {
   const mode = $("#view-editor").dataset.mode;
   if (mode === "batch") return window.batchAdd(videos.map((f) => f.path));
   if (mode === "merge") return window.mergeAdd(videos.map((f) => f.path));
-  if (videos.length) await openInEditor(videos[0].path);
+  if (videos.length) await openQueue(videos.map((f) => f.path));
   if (audio && ed.loaded) await setMusic(audio.path);
   if (image && ed.loaded) await setLogo(image.path);
 };
@@ -1198,6 +1396,11 @@ Object.assign(handlers, {
     setEdStatus(`Saved ${e.width}×${e.height} · ${e.encoder}`, 1);
     syncPanel();
     ed.lastExport = { path: e.path, name: e.name };
+    const item = edq.items[edq.index];
+    if (item) {
+      Object.assign(item, { status: "done", output: e.path, error: "" });
+      renderQueue();
+    }
     $("#edDoneName").textContent = e.name;
     $("#edDoneName").title = e.path;
     $("#edDone").hidden = false;
@@ -1208,6 +1411,26 @@ Object.assign(handlers, {
     ed.exporting = false;
     setEdStatus("Cancelled", 0);
     syncPanel();
+  },
+  queueItem: (e) => {
+    const item = edq.items[e.index];
+    if (!item) return;
+    Object.assign(item, { status: e.state, pct: e.pct || 0 });
+    if (e.state === "done") item.output = e.output;
+    if (e.state === "failed") item.error = e.error || "";
+    renderQueue();
+  },
+  queueDone: (e) => {
+    edq.exporting = false;
+    ed.exporting = false;
+    edq.items.forEach((it) => { if (it.status === "queued") it.status = ""; });
+    setEdStatus(`Exported ${e.ok}/${e.total} videos`, e.ok ? 1 : 0);
+    syncPanel();
+    renderQueue();
+    const action = e.ok ? { label: "Post all to TikTok", run: () => $("#eqPostAll").click() } : undefined;
+    if (e.failed.length) toast("error", `Exported ${e.ok}/${e.total}`, e.failed.join("\n"), action);
+    else if (e.cancelled) toast("info", `Cancelled — ${e.ok}/${e.total} exported`, "", action);
+    else toast("success", `Exported ${e.total} videos`, "Next: Post all to TikTok.", action);
   },
   stripDone: (e) => {
     if (reloadAfterStrip) {
@@ -1226,9 +1449,11 @@ handlers.busy = (e) => {
   baseBusy(e);
   if (!e.busy && ed.exporting) {
     ed.exporting = false;
+    edq.exporting = false;
     setEdStatus("Export failed", 0);
   }
   syncPanel();
+  renderQueue();
 };
 
 window.onEditorView = (active) => {

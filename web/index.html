@@ -129,6 +129,12 @@
             <input id="histSearch" placeholder="Search downloaded videos by title or ID" spellcheck="false">
           </div>
           <span class="chip mono" id="histCountChip">0 videos</span>
+          <div class="hist-sel" id="histSel" hidden>
+            <span class="mono" id="histSelCount"></span>
+            <button class="btn primary sm" id="histEditSel" title="Open the selected videos together in the Editor">Edit selected</button>
+            <button class="btn ghost sm" id="histPostSel" title="Post the selected videos to TikTok in one go">Post selected</button>
+            <button class="btn ghost sm" id="histSelClear">Clear</button>
+          </div>
         </div>
         <div class="hist-list" id="histList"></div>
       </section>
@@ -272,6 +278,16 @@
             <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
             Remove metadata from files…
           </button>
+        </div>
+
+        <div class="ed-queue glass edit-only" id="edQueue" hidden>
+          <div class="eq-boxes" id="eqBoxes"></div>
+          <div class="eq-actions">
+            <span class="eq-note muted" id="eqNote"></span>
+            <button class="btn ghost sm" id="eqApplyAll" title="Copy this video's edits (crop, zoom, colors, text, logo, music, speed…) to the other videos — trims stay per video">Apply to all</button>
+            <button class="btn primary sm" id="eqExportAll"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Export all</button>
+            <button class="btn ghost sm" id="eqPostAll" title="Post every exported video to TikTok" disabled><svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.4-7.5a1 1 0 0 0 0-1.8L3.4 3.6a.99.99 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>Post all</button>
+          </div>
         </div>
 
         <div class="ed-body edit-only">
@@ -672,6 +688,35 @@
       <div class="modal-actions">
         <button type="button" class="btn ghost" id="ttCancel">Cancel</button>
         <button type="submit" class="btn primary" id="ttSubmit">Post</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal" id="ttmModal" hidden>
+    <form class="modal-card glass ttm-card" id="ttmForm" autocomplete="off">
+      <h3 id="ttmTitle">Post videos to TikTok</h3>
+      <div class="field grow">
+        <label for="ttmProfile">Profile</label>
+        <select id="ttmProfile"></select>
+      </div>
+      <label class="ed-check"><input type="checkbox" id="ttmSchedule"> Schedule — a date and time for each video</label>
+      <div class="ttm-spread" id="ttmSpread">
+        <span>First at</span>
+        <input type="datetime-local" id="ttmStart" step="300" aria-label="First video at">
+        <span>then every</span>
+        <select id="ttmEvery" aria-label="Interval">
+          <option value="30">30 min</option><option value="60">1 hour</option><option value="120">2 hours</option>
+          <option value="180" selected>3 hours</option><option value="240">4 hours</option><option value="360">6 hours</option>
+          <option value="720">12 hours</option><option value="1440">1 day</option>
+        </select>
+        <button type="button" class="btn ghost sm" id="ttmFill">Fill times</button>
+      </div>
+      <div class="ttm-rows" id="ttmRows"></div>
+      <label class="ed-check"><input type="checkbox" id="ttmReview" checked> Stop before Post — fill every video in its own tab, I'll check them and press Post myself</label>
+      <div class="muted ttm-note">The VPN is checked once, then the videos are uploaded one after another, each in a new tab of the profile.</div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="ttmCancel">Cancel</button>
+        <button type="submit" class="btn primary" id="ttmSubmit">Fill in all</button>
       </div>
     </form>
   </div>

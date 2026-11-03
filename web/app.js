@@ -70,6 +70,7 @@ const state = {
   history: [],
   histFilter: "all",
   histQuery: "",
+  histSelected: new Set(), // "kind:id" of downloaded videos picked for Edit / Post selected
   fbLoggedIn: false,
   dyLoggedIn: false,
   igLoggedIn: false,
@@ -496,7 +497,9 @@ function renderHistory() {
     list.innerHTML = items.map((it) => {
       const icon = (PLATFORMS[it.kind] || PLATFORMS.youtube).icon();
       const name = (PLATFORMS[it.kind] || PLATFORMS.youtube).name;
-      return `<div class="hist-row" data-kind="${esc(it.kind)}" data-id="${esc(it.id)}">
+      const key = `${it.kind}:${it.id}`;
+      return `<div class="hist-row${state.histSelected.has(key) ? " selected" : ""}" data-kind="${esc(it.kind)}" data-id="${esc(it.id)}">
+        <button class="hist-check" title="${it.fileExists ? "Select for Edit / Post selected" : "File not found"}" ${it.fileExists ? "" : "disabled"}>${ICONS.check}</button>
         <div class="hist-thumb"><span class="ph">${icon}</span>${it.thumb
           ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(it.thumb)}" onerror="this.remove()" alt="">` : ""}</div>
         <div class="hist-info">
@@ -515,15 +518,39 @@ function renderHistory() {
       </div>`;
     }).join("");
   }
+  renderHistSelection();
   updateCounts();
 }
+
+/* the selection keeps the click order: that is the order of the boxes in the Editor and of the posts */
+function selectedHistory() {
+  return [...state.histSelected].map((key) => state.history.find((h) => `${h.kind}:${h.id}` === key))
+    .filter((it) => it && it.fileExists);
+}
+
+function renderHistSelection() {
+  const n = selectedHistory().length;
+  $("#histSel").hidden = !n;
+  $("#histSelCount").textContent = `${n} selected`;
+}
+
+$("#histEditSel").addEventListener("click", () =>
+  window.openQueue(selectedHistory().map((it) => ({ file: it.file, title: it.title }))));
+$("#histPostSel").addEventListener("click", () =>
+  openPostManyDialog(selectedHistory().map((it) => ({ file: it.file, caption: it.title }))));
+$("#histSelClear").addEventListener("click", () => { state.histSelected.clear(); renderHistory(); });
 
 $("#histList").addEventListener("click", async (e) => {
   const row = e.target.closest(".hist-row");
   if (!row) return;
   const it = state.history.find((h) => h.kind === row.dataset.kind && h.id === row.dataset.id);
   if (!it) return;
-  if (e.target.closest(".h-open")) api.open_url(it.url);
+  if (e.target.closest(".hist-check")) {
+    const key = `${it.kind}:${it.id}`;
+    if (!state.histSelected.delete(key)) state.histSelected.add(key);
+    row.classList.toggle("selected", state.histSelected.has(key));
+    renderHistSelection();
+  } else if (e.target.closest(".h-open")) api.open_url(it.url);
   else if (e.target.closest(".h-file")) api.reveal_file(it.file);
   else if (e.target.closest(".h-edit")) window.openInEditor(it.file);
   else if (e.target.closest(".h-tt")) openPostDialog(it.file, it.title);
@@ -662,6 +689,95 @@ $("#ttForm").addEventListener("submit", async (e) => {
   const name = $("#ttProfile").selectedOptions[0]?.textContent || "";
   toast("info", "Posting to TikTok…", `${name} — follow the progress in the status bar.`);
 });
+/* ---------- post several videos: one row each (caption + schedule), one VPN check, one tab per video ---------- */
+const ttm = { items: [] };
+
+function localInputValue(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+async function openPostManyDialog(items) {
+  if (!items.length) return;
+  if (items.length === 1) return openPostDialog(items[0].file, items[0].caption);
+  await loadTT();
+  if (!tt.profiles.length) {
+    toast("error", "No Chrome profiles yet", "Choose your Chrome Portable folder in the TikTok tab first.",
+      { label: "Open TikTok tab", run: () => setView("tiktok") });
+    return;
+  }
+  ttm.items = items.map((it) => ({ ...it, when: "" }));
+  $("#ttmTitle").textContent = `Post ${items.length} videos to TikTok`;
+  $("#ttmProfile").innerHTML = tt.profiles.map((p) =>
+    `<option value="${esc(p.dir)}">${esc(p.name)}${p.country ? ` — VPN ${p.country}` : ""}</option>`).join("");
+  if (tt.profiles.some((p) => p.dir === tt.lastProfile)) $("#ttmProfile").value = tt.lastProfile;
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  start.setMinutes(Math.ceil(start.getMinutes() / 5) * 5, 0, 0);
+  $("#ttmStart").value = localInputValue(start);
+  $("#ttmSchedule").checked = false;
+  fillPostManyTimes();
+  syncPostMany();
+  $("#ttmModal").hidden = false;
+}
+window.openPostManyDialog = openPostManyDialog;
+
+function renderPostManyRows() {
+  const schedule = $("#ttmSchedule").checked;
+  $("#ttmRows").innerHTML = ttm.items.map((it, i) => `<div class="ttm-row" data-i="${i}">
+      <div class="ttm-head"><b>${i + 1}</b><span class="mono" title="${esc(it.file)}">${esc(it.file.split(/[\\/]/).pop())}</span></div>
+      <textarea class="ttm-caption" rows="2" maxlength="4000" spellcheck="false" placeholder="Caption, #hashtags…">${esc(it.caption)}</textarea>
+      ${schedule ? `<input type="datetime-local" class="ttm-when" step="300" value="${esc(it.when)}" aria-label="Schedule for video ${i + 1}">` : ""}
+    </div>`).join("");
+}
+
+/* first video at the start time, the next ones every N minutes */
+function fillPostManyTimes() {
+  const start = new Date($("#ttmStart").value);
+  if (isNaN(start)) return;
+  const every = Number($("#ttmEvery").value);
+  ttm.items.forEach((it, i) => { it.when = localInputValue(new Date(start.getTime() + i * every * 60000)); });
+  renderPostManyRows();
+}
+
+function syncPostMany() {
+  const schedule = $("#ttmSchedule").checked;
+  $("#ttmSpread").classList.toggle("off", !schedule);
+  $("#ttmSubmit").textContent = $("#ttmReview").checked ? "Fill in all" : schedule ? "Schedule all" : "Post all now";
+  renderPostManyRows();
+}
+
+$("#ttmRows").addEventListener("input", (e) => {
+  const row = e.target.closest(".ttm-row");
+  if (!row) return;
+  const it = ttm.items[Number(row.dataset.i)];
+  if (e.target.classList.contains("ttm-caption")) it.caption = e.target.value;
+  if (e.target.classList.contains("ttm-when")) it.when = e.target.value;
+});
+$("#ttmSchedule").addEventListener("change", syncPostMany);
+$("#ttmReview").addEventListener("change", syncPostMany);
+$("#ttmFill").addEventListener("click", fillPostManyTimes);
+$("#ttmCancel").addEventListener("click", () => { $("#ttmModal").hidden = true; });
+$("#ttmModal").addEventListener("mousedown", (e) => { if (e.target.id === "ttmModal") $("#ttmModal").hidden = true; });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#ttmModal").hidden) $("#ttmModal").hidden = true; });
+$("#ttmForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const schedule = $("#ttmSchedule").checked;
+  if (schedule) {
+    const bad = ttm.items.findIndex((it) => !it.when || Number(it.when.slice(-2)) % 5);
+    if (bad >= 0) { toast("error", `Video ${bad + 1}: pick a time`, "TikTok schedules in 5-minute steps (e.g. 14:05, 14:10)."); return; }
+  }
+  const req = {
+    profile: $("#ttmProfile").value,
+    review: $("#ttmReview").checked,
+    items: ttm.items.map((it) => ({ file: it.file, caption: it.caption, schedule: schedule ? it.when : "" })),
+  };
+  const res = await api.tt_post_many(req);
+  if (!res.ok) { toast("error", "Cannot post", res.error); return; }
+  tt.lastProfile = req.profile;
+  $("#ttmModal").hidden = true;
+  const name = $("#ttmProfile").selectedOptions[0]?.textContent || "";
+  toast("info", `Posting ${req.items.length} videos…`, `${name} — follow the progress in the status bar.`);
+});
+
 $("#ttChoose").addEventListener("click", async () => {
   const res = await api.tt_choose_root();
   if (!res) return;
@@ -841,9 +957,16 @@ const handlers = {
     logs.items.unshift(e.entry);
     if (state.view === "logs") renderLogs();
   },
+  ttBatchDone: (e) => {
+    const action = { label: "Open TikTok tab", run: () => setView("tiktok") };
+    const what = e.review ? "ready for review — check each tab in Chrome and press Post" : "posted";
+    toast(e.ok === e.total ? "success" : "error", `${e.ok}/${e.total} videos ${e.review ? "filled in" : "posted"}`,
+      e.ok === e.total ? `All videos ${what}.` : "See the TikTok tab or Logs for the failed ones.", action);
+  },
   ttPosted: (e) => {
     const r = e.record;
     const action = { label: "Open TikTok tab", run: () => setView("tiktok") };
+    if (e.batch && r.status !== "failed") { loadHistory(); if (state.view === "tiktok") loadTT(); return; }
     if (r.status === "failed") toast("error", `Posting to ${r.profileName} failed`, r.error, action);
     else if (r.status === "review") toast("info", `Ready in ${r.profileName}`, "Check the Chrome window and press Post yourself.");
     else toast("success", r.when ? `Scheduled on ${r.profileName}` : `Posted to ${r.profileName}`, r.when ? `Goes live ${r.when}` : r.caption);
