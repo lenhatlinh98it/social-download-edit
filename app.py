@@ -1096,7 +1096,8 @@ class Api:
                   "at": time.strftime("%Y-%m-%d %H:%M"), "when": when.strftime("%Y-%m-%d %H:%M") if when else "",
                   "status": "", "error": ""}
         try:
-            country = tiktok.post(root, profile["dir"], file, caption, when, profile["country"], review, status)
+            country = tiktok.post(root, profile["dir"], file, caption, when, profile["country"], review, status,
+                                  shots_dir=os.path.join(facebook.DATA_DIR, "tiktok-errors"))
             record["status"] = "review" if review else "posted"
             record["country"] = country
         except (tiktok.PostError, tiktok.ChromeBusy) as ex:

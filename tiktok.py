@@ -233,42 +233,104 @@ def _wait_posted(page, timeout=180):
     raise PostError("TikTok did not confirm the post in time — check the Chrome window.")
 
 
-def post(root, profile_dir, video, caption, when=None, expected_country="", review=False, status=lambda _t: None):
-    """Upload `video` to the profile's TikTok. `when` (local datetime) schedules it. Returns the exit country."""
+NOTICES_JS = """() => [...document.querySelectorAll('[role="alert"], [role="alertdialog"], [role="dialog"], [class*="toast" i], [class*="notice" i], [class*="error" i]')]
+    .filter(e => e.offsetParent !== null && e.innerText.trim())
+    .map(e => e.innerText.trim().replace(/\\s+/g, ' ').slice(0, 200))"""
+
+
+def _diagnose(page, shots_dir, profile_dir, step):
+    """Screenshot + visible TikTok messages at the moment a post fails, so the cause can be read afterwards."""
+    shot, notices = "", []
+    try:
+        notices = list(dict.fromkeys(page.evaluate(NOTICES_JS)))[:4]
+    except PlaywrightError:
+        pass
+    if shots_dir:
+        try:
+            os.makedirs(shots_dir, exist_ok=True)
+            shot = os.path.join(shots_dir, f"{time.strftime('%Y%m%d-%H%M%S')}_{re.sub(r'[^A-Za-z0-9]+', '', profile_dir)}_{step.split()[0]}.png")
+            page.screenshot(path=shot, full_page=True)
+        except PlaywrightError:
+            shot = ""
+    return shot, notices
+
+
+def post(root, profile_dir, video, caption, when=None, expected_country="", review=False, status=lambda _t: None,
+         shots_dir=None):
+    """Upload `video` to the profile's TikTok. `when` (local datetime) schedules it. Returns the exit country.
+    On failure the error names the step, TikTok's visible messages and a screenshot saved in `shots_dir`."""
     with sync_playwright() as p:
         status("Opening the Chrome profile…")
         browser, page = _open_profile_page(p, root, profile_dir)
+        step = "checking the VPN"
+
+        def stage(name, text):
+            nonlocal step
+            step = name
+            status(text)
+
         try:
-            page.bring_to_front()
-            country = _wait_vpn(page, expected_country, status)
-            status("Opening TikTok Studio…")
-            page.goto(UPLOAD_URL, wait_until="domcontentloaded", timeout=60000)
-            try:
-                page.wait_for_selector("input[type=file]", state="attached", timeout=60000)
-            except PlaywrightTimeout:
-                if "login" in page.url:
-                    raise PostError("This profile is not logged in to TikTok.") from None
-                raise PostError("TikTok Studio's upload page did not load.") from None
-            status("Uploading the video to TikTok…")
-            page.set_input_files("input[type=file]", video)
-            page.wait_for_selector('[data-e2e="caption_container"] [contenteditable="true"]', timeout=120000)
-            page.wait_for_function("""() => {
-                const b = document.querySelector('[data-e2e="post_video_button"]');
-                return b && b.getAttribute('aria-disabled') !== 'true' && !b.disabled
-                    && document.querySelector('[data-e2e="cover_container"] img');
-            }""", timeout=600000)
-            status("Filling in the caption…")
-            _type_caption(page, caption)
-            if when:
-                status("Setting the schedule…")
-                _set_schedule(page, when)
-            if review:
-                status("Ready — review it in Chrome and press Post yourself")
-                return country
-            status("Posting…")
-            page.click('[data-e2e="post_video_button"]')
-            _wait_posted(page)
-            page.close()  # posted: drop this tab so windows don't pile up; failures stay open to inspect
-            return country
+            return _post_steps(page, video, caption, when, expected_country, review, status, stage)
+        except Exception as ex:  # noqa: BLE001 - add where it failed and what TikTok showed, then re-raise as PostError
+            shot, notices = _diagnose(page, shots_dir, profile_dir, step)
+            detail = str(ex).strip().splitlines()[0] if str(ex).strip() else type(ex).__name__
+            msg = f"Failed while {step}: {detail}"
+            if notices:
+                msg += " | TikTok shows: " + " / ".join(notices)
+            if shot:
+                msg += f" | Screenshot: {shot}"
+            raise PostError(msg) from ex
         finally:
             browser.close()  # only disconnects; Chrome stays open
+
+
+def _set_local_file(page, selector, path):
+    """Hand the file path to Chrome (same machine) instead of page.set_input_files: over connect_over_cdp
+    Playwright streams the file's bytes, which fails above 50 MB and times out on large files."""
+    cdp = page.context.new_cdp_session(page)
+    try:
+        root = cdp.send("DOM.getDocument", {"depth": 0})["root"]["nodeId"]
+        node = cdp.send("DOM.querySelector", {"nodeId": root, "selector": selector})["nodeId"]
+        if not node:
+            raise PostError("TikTok Studio's file input was not found.")
+        cdp.send("DOM.setFileInputFiles", {"nodeId": node, "files": [os.path.abspath(path)]})
+    finally:
+        cdp.detach()
+
+
+def _post_steps(page, video, caption, when, expected_country, review, status, stage):
+    page.bring_to_front()
+    country = _wait_vpn(page, expected_country, status)
+    stage("opening TikTok Studio", "Opening TikTok Studio…")
+    page.goto(UPLOAD_URL, wait_until="domcontentloaded", timeout=60000)
+    try:
+        page.wait_for_selector("input[type=file]", state="attached", timeout=60000)
+    except PlaywrightTimeout:
+        if "login" in page.url:
+            raise PostError("This profile is not logged in to TikTok.") from None
+        raise PostError("TikTok Studio's upload page did not load.") from None
+    stage("uploading the video", "Uploading the video to TikTok…")
+    _set_local_file(page, "input[type=file]", video)
+    page.wait_for_selector('[data-e2e="caption_container"] [contenteditable="true"]', timeout=120000)
+    stage("waiting for TikTok to process the upload", "Waiting for TikTok to process the upload…")
+    try:
+        page.wait_for_function("""() => {
+            const b = document.querySelector('[data-e2e="post_video_button"]');
+            return b && b.getAttribute('aria-disabled') !== 'true' && !b.disabled
+                && document.querySelector('[data-e2e="cover_container"] img');
+        }""", timeout=600000)
+    except PlaywrightTimeout:
+        raise PostError("TikTok did not finish processing the upload within 10 minutes") from None
+    stage("filling in the caption", "Filling in the caption…")
+    _type_caption(page, caption)
+    if when:
+        stage("setting the schedule", "Setting the schedule…")
+        _set_schedule(page, when)
+    if review:
+        status("Ready — review it in Chrome and press Post yourself")
+        return country
+    stage("posting", "Posting…")
+    page.click('[data-e2e="post_video_button"]')
+    _wait_posted(page)
+    page.close()  # posted: drop this tab so windows don't pile up; failures stay open to inspect
+    return country
