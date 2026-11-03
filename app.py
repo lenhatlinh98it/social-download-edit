@@ -402,6 +402,18 @@ class Api:
         self._log("success", "app", f"Grabber activated on {license.machine_id()}")
         return self.license_info()
 
+    def _watch_license(self):
+        """Re-check the saved key every minute so a key that expires while Grabber is open locks it again."""
+        while True:
+            time.sleep(60)
+            if not self._license["ok"]:
+                continue
+            result = license.check(self._license.get("key", ""))
+            if not result["ok"]:
+                self._license = {**result, "key": self._license.get("key", "")}
+                self._log("warning", "app", f"License stopped working: {result['reason']}")
+                self._emit("licenseRequired")
+
     # ---------- license keys (owner edition) ----------
     def keys_state(self):
         if not keygen:
@@ -415,11 +427,11 @@ class Api:
         self._log("info", "app", "License signing key ready", keygen.PRIVATE)
         return {"ok": True, "publicKey": pub, **self.keys_state()}
 
-    def keys_issue(self, machine, days=0, note=""):
+    def keys_issue(self, machine, days=0, note="", minutes=0):
         if not keygen:
             return {"ok": False, "error": "Not available in this edition."}
         try:
-            key = keygen.issue(machine, int(days or 0), (note or "").strip())
+            key = keygen.issue(machine, int(days or 0), (note or "").strip(), int(minutes or 0))
         except keygen.KeygenError as ex:
             return {"ok": False, "error": str(ex)}
         self._log("success", "app", f"License key issued for {license.machine_id(license.parse_machine_id(machine))}"
@@ -428,6 +440,8 @@ class Api:
 
     def init(self):
         threading.Thread(target=self._check_engine, daemon=True).start()
+        if not OWNER:
+            threading.Thread(target=self._watch_license, daemon=True).start()
         return {
             "edition": edition.EDITION,
             "license": self.license_info(),
