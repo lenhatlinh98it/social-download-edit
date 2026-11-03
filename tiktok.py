@@ -284,6 +284,20 @@ def post(root, profile_dir, video, caption, when=None, expected_country="", revi
             browser.close()  # only disconnects; Chrome stays open
 
 
+def _set_local_file(page, selector, path):
+    """Hand the file path to Chrome (same machine) instead of page.set_input_files: over connect_over_cdp
+    Playwright streams the file's bytes, which fails above 50 MB and times out on large files."""
+    cdp = page.context.new_cdp_session(page)
+    try:
+        root = cdp.send("DOM.getDocument", {"depth": 0})["root"]["nodeId"]
+        node = cdp.send("DOM.querySelector", {"nodeId": root, "selector": selector})["nodeId"]
+        if not node:
+            raise PostError("TikTok Studio's file input was not found.")
+        cdp.send("DOM.setFileInputFiles", {"nodeId": node, "files": [os.path.abspath(path)]})
+    finally:
+        cdp.detach()
+
+
 def _post_steps(page, video, caption, when, expected_country, review, status, stage):
     page.bring_to_front()
     country = _wait_vpn(page, expected_country, status)
@@ -296,7 +310,7 @@ def _post_steps(page, video, caption, when, expected_country, review, status, st
             raise PostError("This profile is not logged in to TikTok.") from None
         raise PostError("TikTok Studio's upload page did not load.") from None
     stage("uploading the video", "Uploading the video to TikTok…")
-    page.set_input_files("input[type=file]", video)
+    _set_local_file(page, "input[type=file]", video)
     page.wait_for_selector('[data-e2e="caption_container"] [contenteditable="true"]', timeout=120000)
     stage("waiting for TikTok to process the upload", "Waiting for TikTok to process the upload…")
     try:

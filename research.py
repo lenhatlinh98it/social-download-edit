@@ -108,8 +108,15 @@ LANG_WORDS = {
     "es": set("el la los las que y en un una por para con cómo del lo coche limpieza".split()),
     "pt": set("o os as que e em um uma para com como não do da carro limpeza".split()),
     "fr": set("le la les des et un une pour avec comment est du voiture nettoyage".split()),
-    "hi": set("hai ka ki ke ko se aur kya kaise mein yeh wala bhai".split()),
+    "hi": set("hai ka ki ke ko se aur kya kaise mein yeh wala bhai hamare hamari aapko aap toh zaroor nahi "
+              "karein dekhne milega bhi".split()),
 }
+# Latin-script markets: Shorts aimed at another market (South Asian prices / places, other scripts in titles)
+FOREIGN_MARKERS = re.compile(r"₹|\blakh\b|\bcrore\b|\bindian?\b|\bpakistan\w*|\bbangladesh\w*"
+                             r"|[Ѐ-ӿ؀-ۿऀ-෿฀-๿぀-ヿ一-鿿가-힯]",
+                             re.I)
+MAX_FOREIGN_SHARE = 0.25  # of a channel's recent Shorts
+MIN_DISTINCT_TITLES = 0.5  # spam channels paste one clickbait title on every Short, whatever the video shows
 TOPIC_STOPWORDS = set("the and for with how best easy quick tips video videos shorts ideas".split())
 
 
@@ -190,6 +197,23 @@ def language_ok(recent, lang):
         return sum(bool(script.search(v["title"])) for v in recent) / len(recent) >= MIN_SCRIPT_SHARE
     guesses = [g for g in (guess_lang(f"{v['title']} {v['description'][:200]}") for v in recent) if g]
     return not guesses or sum(g == lang for g in guesses) / len(guesses) >= MIN_LANG_SHARE
+
+
+def foreign_share(recent):
+    """Share of recent Shorts whose title / description / tags point at another market."""
+    if not recent:
+        return 0.0
+    hits = sum(bool(FOREIGN_MARKERS.search(f"{v['title']} {' '.join(v.get('tags', []))} {v['description'][:300]}"))
+               for v in recent)
+    return hits / len(recent)
+
+
+def distinct_titles(recent):
+    """Share of distinct titles among recent Shorts (invisible characters and case ignored)."""
+    if not recent:
+        return 1.0
+    titles = {re.sub(r"[\s​-‏⁠﻿]+", " ", v["title"]).strip().casefold() for v in recent}
+    return len(titles) / len(recent)
 
 
 def topic_pattern(keywords):
@@ -454,7 +478,14 @@ class Research:
                 return c
             recent = self.yt.videos(self.yt.playlist_ids("UUSH" + tail, 20))
             c["recent"] = recent
-            if not language_ok(recent, lang):
+            if distinct_titles(recent) < MIN_DISTINCT_TITLES:
+                c["offMarket"] = "spam"
+                return c
+            channel_lang = guess_lang(c["description"][:500])
+            if not language_ok(recent, lang) or (channel_lang and channel_lang != lang):
+                c["offMarket"] = "language"
+                return c
+            if lang not in MARKET_SCRIPTS and foreign_share(recent) >= MAX_FOREIGN_SHARE:
                 c["offMarket"] = "language"
                 return c
             c["topicShare"] = round(topic_share(recent, topic), 2)
@@ -482,8 +513,10 @@ class Research:
         out.sort(key=lambda c: c["score"], reverse=True)
         off_lang = sum(1 for c in stage1 if c.get("offMarket") == "language")
         off_topic = sum(1 for c in stage1 if c.get("offMarket") == "topic")
+        spam = sum(1 for c in stage1 if c.get("offMarket") == "spam")
         self.log("info", f"{len(out)} promising Shorts channels (≥{int(MIN_SHORTS_SHARE * 100)} % Shorts, active in the last 30 days"
-                         f"; dropped {off_lang} not in the market's language and {off_topic} mostly about other topics)")
+                         f"; dropped {off_lang} not in the market's language or aimed at another market, "
+                         f"{off_topic} mostly about other topics and {spam} reusing one title on most Shorts)")
         return out
 
     def channel_by_url(self, url):
