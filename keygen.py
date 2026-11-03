@@ -46,7 +46,7 @@ def init():
     return ed25519.public_key(load_secret()).hex()
 
 
-def issue(machine_text, days=0, note=""):
+def issue(machine_text, days=0, note="", minutes=0):
     secret = load_secret()
     if ed25519.public_key(secret) != license.PUBLIC_KEY:
         raise KeygenError("This signing key does not match PUBLIC_KEY in license.py — the app would reject its keys.")
@@ -54,7 +54,7 @@ def issue(machine_text, days=0, note=""):
         machine = license.parse_machine_id(machine_text)
     except ValueError as ex:
         raise KeygenError(str(ex)) from None
-    key = license.make_key(secret, machine, int(days or 0))
+    key = license.make_key(secret, machine, int(days or 0), minutes_valid=int(minutes or 0))
     if not license.check(key, machine)["ok"]:
         raise KeygenError("The new key did not verify.")
     new = not os.path.exists(ISSUED)
@@ -62,7 +62,8 @@ def issue(machine_text, days=0, note=""):
         w = csv.writer(f)
         if new:
             w.writerow(["date", "machine_id", "days", "note", "key"])
-        w.writerow([datetime.date.today().isoformat(), license.machine_id(machine), days or "lifetime", note, key])
+        w.writerow([datetime.date.today().isoformat(), license.machine_id(machine),
+                    f"{minutes} min" if minutes else days or "lifetime", note, key])
     return key
 
 

@@ -3,6 +3,7 @@
   python tools/keygen.py init                       create the signing key (once) and print the public key
   python tools/keygen.py issue 8F3A-21C9-77DE-0B41  print a lifetime key for that Machine ID
   python tools/keygen.py issue <id> --days 365 --note "Customer name"
+  python tools/keygen.py issue <id> --minutes 5      test key that stops working after 5 minutes
 """
 import argparse
 import os
@@ -19,6 +20,7 @@ def main():
     p = sub.add_parser("issue")
     p.add_argument("machine", help="Machine ID shown by the buyer's app")
     p.add_argument("--days", type=int, default=0, help="days valid (default 0 = lifetime)")
+    p.add_argument("--minutes", type=int, default=0, help="minutes valid, for test keys (overrides --days)")
     p.add_argument("--note", default="", help="customer name / order, saved in issued.csv")
     args = ap.parse_args()
     try:
@@ -26,7 +28,7 @@ def main():
             print("Signing key:", keygen.PRIVATE, "(back it up somewhere safe)")
             print("Public key for license.py PUBLIC_KEY:", keygen.init())
         else:
-            print(keygen.issue(args.machine, args.days, args.note))
+            print(keygen.issue(args.machine, args.days, args.note, args.minutes))
     except keygen.KeygenError as ex:
         sys.exit(str(ex))
 
