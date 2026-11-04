@@ -714,6 +714,7 @@ async function openPostManyDialog(items) {
   start.setMinutes(Math.ceil(start.getMinutes() / 5) * 5, 0, 0);
   $("#ttmStart").value = localInputValue(start);
   $("#ttmSchedule").checked = false;
+  syncPostManyMode();
   fillPostManyTimes();
   syncPostMany();
   $("#ttmModal").hidden = false;
@@ -729,13 +730,62 @@ function renderPostManyRows() {
     </div>`).join("");
 }
 
-/* first video at the start time, the next ones every N minutes */
+/* "11:00, 18h, 21:30" -> sorted unique minutes of the day; null when a time is invalid or off TikTok's 5-minute steps */
+function parseDailySlots(text) {
+  const out = new Set();
+  for (const part of text.split(/[,;\s]+/).filter(Boolean)) {
+    const m = part.match(/^(\d{1,2})(?:[:hH](\d{2})?)?$/);
+    if (!m) return null;
+    const h = Number(m[1]), min = Number(m[2] || 0);
+    if (h > 23 || min > 59 || min % 5) return null;
+    out.add(h * 60 + min);
+  }
+  return out.size ? [...out].sort((a, b) => a - b) : null;
+}
+
+/* every mode: first video at the start time, the next ones every N minutes;
+   daily mode: the videos fill the day's time slots in order, from the start time on, day after day */
 function fillPostManyTimes() {
   const start = new Date($("#ttmStart").value);
   if (isNaN(start)) return;
-  const every = Number($("#ttmEvery").value);
-  ttm.items.forEach((it, i) => { it.when = localInputValue(new Date(start.getTime() + i * every * 60000)); });
+  const plan = $("#ttmPlan");
+  plan.textContent = "";
+  if ($("#ttmMode").value === "daily") {
+    const slots = parseDailySlots($("#ttmSlots").value);
+    if (!slots) {
+      if ($("#ttmSchedule").checked) toast("error", "Check the times of day", "Write them like 11:00, 18:00, 21:00 — minutes in 5-minute steps.");
+      return;
+    }
+    const day = new Date(start);
+    day.setHours(0, 0, 0, 0);
+    let i = 0;
+    while (i < ttm.items.length) {
+      for (const s of slots) {
+        if (i >= ttm.items.length) break;
+        const t = new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(s / 60), s % 60);
+        if (t < start) continue;
+        ttm.items[i++].when = localInputValue(t);
+      }
+      day.setDate(day.getDate() + 1);
+    }
+  } else {
+    const every = Number($("#ttmEvery").value);
+    ttm.items.forEach((it, i) => { it.when = localInputValue(new Date(start.getTime() + i * every * 60000)); });
+  }
+  const last = new Date(ttm.items[ttm.items.length - 1].when);
+  const days = Math.round((new Date(last).setHours(0, 0, 0, 0) - new Date(start).setHours(0, 0, 0, 0)) / 864e5) + 1;
+  plan.textContent = `${ttm.items.length} videos over ${days} day${days > 1 ? "s" : ""}, last on ${last.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}.`;
+  if ((last - Date.now()) / 864e5 > 30) {
+    plan.textContent += " TikTok only schedules about 30 days ahead — the later videos will be refused.";
+  }
   renderPostManyRows();
+}
+
+function syncPostManyMode() {
+  const daily = $("#ttmMode").value === "daily";
+  $("#ttmSlots").hidden = !daily;
+  $("#ttmEvery").hidden = daily;
+  $("#ttmStartLabel").textContent = daily ? "From" : "First at";
 }
 
 function syncPostMany() {
@@ -755,6 +805,8 @@ $("#ttmRows").addEventListener("input", (e) => {
 $("#ttmSchedule").addEventListener("change", syncPostMany);
 $("#ttmReview").addEventListener("change", syncPostMany);
 $("#ttmFill").addEventListener("click", fillPostManyTimes);
+$("#ttmMode").addEventListener("change", () => { syncPostManyMode(); fillPostManyTimes(); });
+$("#ttmSlots").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fillPostManyTimes(); } });
 $("#ttmCancel").addEventListener("click", () => { $("#ttmModal").hidden = true; });
 $("#ttmModal").addEventListener("mousedown", (e) => { if (e.target.id === "ttmModal") $("#ttmModal").hidden = true; });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#ttmModal").hidden) $("#ttmModal").hidden = true; });

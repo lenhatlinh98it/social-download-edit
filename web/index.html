@@ -701,15 +701,20 @@
       </div>
       <label class="ed-check"><input type="checkbox" id="ttmSchedule"> Schedule — a date and time for each video</label>
       <div class="ttm-spread" id="ttmSpread">
-        <span>First at</span>
+        <span id="ttmStartLabel">First at</span>
         <input type="datetime-local" id="ttmStart" step="300" aria-label="First video at">
-        <span>then every</span>
+        <select id="ttmMode" aria-label="Spread mode">
+          <option value="every">then every</option><option value="daily">then each day at</option>
+        </select>
+        <input type="text" id="ttmSlots" class="ttm-slots" value="11:00, 18:00, 21:00" spellcheck="false"
+               placeholder="11:00, 18:00, 21:00" aria-label="Times of day" hidden>
         <select id="ttmEvery" aria-label="Interval">
           <option value="30">30 min</option><option value="60">1 hour</option><option value="120">2 hours</option>
           <option value="180" selected>3 hours</option><option value="240">4 hours</option><option value="360">6 hours</option>
           <option value="720">12 hours</option><option value="1440">1 day</option>
         </select>
         <button type="button" class="btn ghost sm" id="ttmFill">Fill times</button>
+        <span class="ttm-plan" id="ttmPlan"></span>
       </div>
       <div class="ttm-rows" id="ttmRows"></div>
       <label class="ed-check"><input type="checkbox" id="ttmReview" checked> Stop before Post — fill every video in its own tab, I'll check them and press Post myself</label>
