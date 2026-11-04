@@ -1367,6 +1367,7 @@ handlers.filesDropped = async (e) => {
   const mode = $("#view-editor").dataset.mode;
   if (mode === "batch") return window.batchAdd(videos.map((f) => f.path));
   if (mode === "merge") return window.mergeAdd(videos.map((f) => f.path));
+  if (mode === "smartcut") return videos.length && window.scSetSource?.(videos[0].path);
   if (videos.length) await openQueue(videos.map((f) => f.path));
   if (audio && ed.loaded) await setMusic(audio.path);
   if (image && ed.loaded) await setLogo(image.path);

@@ -1,3 +1,6 @@
 yt-dlp==2026.10.26
 pywebview==6.2.1
 playwright==1.64.0
+# Smart cut (owner edition): local speech-to-text and face detection
+faster-whisper==1.2.1
+opencv-python==5.0.0.93

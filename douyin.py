@@ -195,6 +195,8 @@ def fetch_user_videos(url, on_progress=None, max_idle_rounds=4):
                 "title": _caption(aweme),
                 "thumb": covers[0] if covers else "",
                 "likes": (aweme.get("statistics") or {}).get("digg_count") or 0,
+                "duration": round((aweme.get("duration") or video.get("duration") or 0) / 1000) or None,  # ms
+                "uploaded": aweme.get("create_time") or None,
                 "media": media,
             })
     if not pages:

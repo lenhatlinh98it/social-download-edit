@@ -9,6 +9,8 @@ import sys
 import threading
 import time
 import traceback
+import urllib.parse
+import urllib.request
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 
@@ -28,6 +30,10 @@ try:  # owner edition only - the commercial branch ships without these modules
     import research
 except ImportError:
     keygen = research = None
+try:  # owner edition only (local AI: faster-whisper, OpenCV, Ollama)
+    import smartcut
+except ImportError:
+    smartcut = None
 
 engine.activate()  # must run before yt_dlp is imported
 import yt_dlp  # noqa: E402
@@ -53,7 +59,7 @@ LOG_EVENTS = {"list", "done", "editDone", "batchDone", "queueDone", "stripDone",
               "dyLoginRequired", "igLoginRequired"}
 TASK_SOURCES = {"_fetch_task": "fetch", "_download_task": "download", "_export_task": "editor", "_batch_task": "editor",
                 "_merge_task": "editor", "_strip_task": "editor", "_export_many_task": "editor",
-                "_tt_post_task": "tiktok", "_tt_post_many_task": "tiktok"}
+                "_tt_post_task": "tiktok", "_tt_post_many_task": "tiktok", "_smartcut_task": "smartcut"}
 DROP_KINDS = {**dict.fromkeys((".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"), "video"),
               **dict.fromkeys((".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"), "audio"),
               **dict.fromkeys((".png", ".jpg", ".jpeg", ".webp"), "image")}
@@ -97,6 +103,15 @@ def normalize_url(kind, url):
     if kind == "instagram":
         return instagram.normalize_user_url(url)
     return facebook.normalize_reels_url(url)
+
+
+def iso_duration(text):
+    """YouTube's ISO 8601 duration (PT1M30S, P1DT2H) -> seconds."""
+    m = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", text or "")
+    if not m:
+        return None
+    d, h, mi, s = (int(x or 0) for x in m.groups())
+    return d * 86400 + h * 3600 + mi * 60 + s or None
 
 
 def compact_number(n):
@@ -217,6 +232,19 @@ def downloaded_file(info):
     return downloads[0].get("filepath") or ""
 
 
+def reel_time(ydl, video):
+    """Upload time of a Facebook reel: the page's "creation_time" next to the reel's own id (the page also
+    carries the times of the suggested reels that follow)."""
+    try:
+        html = ydl.urlopen(video["url"]).read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - the time is optional
+        return None
+    for m in re.finditer(r'"creation_time":(\d{9,10})', html):
+        if video["id"] in html[max(0, m.start() - 3000):m.end() + 3000]:
+            return int(m.group(1))
+    return None
+
+
 def reel_caption(info, reel_id):
     """Facebook reels have title 'Video'; the real caption is the description's first line."""
     for line in (info.get("description") or "").splitlines():
@@ -241,6 +269,8 @@ def fetch_youtube(url, _status):
             "title": e.get("title") or e["id"],
             "url": e.get("url") or f"https://www.youtube.com/shorts/{e['id']}",
             "views": compact_number(e.get("view_count")),
+            "duration": e.get("duration"),  # the Shorts tab has neither: filled by Api._youtube_meta
+            "uploaded": e.get("timestamp"),
             "thumb": thumbs[0]["url"] if thumbs else f"https://i.ytimg.com/vi/{e['id']}/hqdefault.jpg",
         })
     handle = re.search(r"/(@[^/?#]+)", url)
@@ -289,6 +319,7 @@ class Api:
         self._sources = {"youtube": "", "facebook": "", "douyin": "", "instagram": ""}
         self._gen = {"youtube": 0, "facebook": 0, "douyin": 0, "instagram": 0}
         self._caption_requested = set()
+        self._yt_api_gen = None  # YouTube list whose details come from the Data API
         self._meta_pool = ThreadPoolExecutor(max_workers=3)
         self._cancel = threading.Event()
         self._names_lock = threading.Lock()
@@ -462,6 +493,10 @@ class Api:
         return result[0]
 
     def open_folder(self, path):
+        """Open a folder; one not created yet (nothing saved there so far) opens its nearest existing parent."""
+        path = os.path.normpath(path) if path else ""
+        while path and not os.path.isdir(path) and os.path.dirname(path) != path:
+            path = os.path.dirname(path)
         if path and os.path.isdir(path):
             os.startfile(path)
 
@@ -548,19 +583,25 @@ class Api:
             self._emit("igLogin", loggedIn=instagram.is_logged_in())
         self._emit("list", kind=kind, gen=self._gen[kind], url=url, videos=videos, hidden=hidden,
                    source=source, folder=safe_name(source, fallback=kind), limited=limited)
+        if kind == "youtube" and load_settings().get("youtubeApiKey") and any(not v.get("uploaded") for v in videos):
+            self._yt_api_gen = self._gen[kind]  # lazy per-card lookups are not needed for this list
+            threading.Thread(target=self._youtube_meta, args=(self._gen[kind], videos), daemon=True).start()
         note = f" ({hidden} already downloaded, hidden)" if hidden else ""
         self._emit("status", text=f"Found {len(videos)} new videos{note}", progress=0)
         self._notify("Fetch finished", f"{len(videos)} new videos from {source or url}")
 
     def load_captions(self, kind, indices):
-        """Facebook and Instagram grids show no captions, so they are resolved lazily for visible cards."""
-        if kind not in ("facebook", "instagram"):
+        """Facebook / Instagram grids show no captions, and the YouTube Shorts tab / Instagram grid no duration or
+        upload time: they are resolved lazily for visible cards."""
+        if kind not in ("facebook", "instagram", "youtube"):
             return
         gen = self._gen[kind]
+        if kind == "youtube" and self._yt_api_gen == gen:
+            return  # the YouTube API fills this list in one go
         videos = self._lists[kind]
         for idx in indices:
             key = (gen, idx)
-            if key in self._caption_requested or idx >= len(videos) or videos[idx]["title"]:
+            if key in self._caption_requested or idx >= len(videos) or (videos[idx]["title"] and videos[idx].get("uploaded")):
                 continue
             self._caption_requested.add(key)
             self._meta_pool.submit(self._caption_job, kind, gen, idx, videos[idx])
@@ -570,23 +611,65 @@ class Api:
             return
         if kind == "instagram":
             try:
-                video["media"], caption = instagram.resolve(video["id"])
+                video["media"], caption, meta = instagram.resolve(video["id"])
             except Exception:  # noqa: BLE001 - keep the placeholder title
                 return
-            video["title"] = caption or f"reel_{video['id']}"
-            if gen == self._gen[kind]:
-                self._emit("caption", kind=kind, gen=gen, index=idx, title=video["title"])
-            return
-        try:
-            with facebook.cookie_copy() as cookies, yt_dlp.YoutubeDL(
-                    {"cookiefile": cookies, "quiet": True, "no_warnings": True}) as ydl:
-                info = ydl.extract_info(video["url"], download=False)
-        except Exception:  # noqa: BLE001 - keep the placeholder title
-            return
-        if gen != self._gen["facebook"]:
-            return
-        video["title"] = reel_caption(info, video["id"])
-        self._emit("caption", kind="facebook", gen=gen, index=idx, title=video["title"])
+            video["title"] = video["title"] or caption or f"reel_{video['id']}"
+            video["duration"] = video.get("duration") or meta["duration"]
+            video["uploaded"] = video.get("uploaded") or meta["uploaded"]
+        else:
+            try:
+                if kind == "youtube":
+                    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+                        info = ydl.extract_info(video["url"], download=False, process=False)
+                else:
+                    with facebook.cookie_copy() as cookies, yt_dlp.YoutubeDL(
+                            {"cookiefile": cookies, "quiet": True, "no_warnings": True}) as ydl:
+                        info = ydl.extract_info(video["url"], download=False)
+                        if not info.get("timestamp"):  # yt-dlp gives no upload time for reels
+                            info["timestamp"] = reel_time(ydl, video)
+            except Exception:  # noqa: BLE001 - keep the placeholder title
+                return
+            if kind == "facebook":
+                video["title"] = reel_caption(info, video["id"])
+            video["duration"] = video.get("duration") or info.get("duration")
+            video["uploaded"] = video.get("uploaded") or info.get("timestamp") or info.get("release_timestamp")
+        if gen == self._gen[kind]:
+            self._emit("caption", kind=kind, gen=gen, index=idx, title=video["title"],
+                       duration=video.get("duration"), uploaded=video.get("uploaded"))
+
+    def _youtube_meta(self, gen, videos):
+        """Duration and upload time of a fetched YouTube list from the Data API (50 videos per call, 1 unit each)."""
+        key = load_settings().get("youtubeApiKey") or ""
+        by_id = {v["id"]: i for i, v in enumerate(videos)}
+        ids = [v["id"] for v in videos if not v.get("uploaded")]
+        for start in range(0, len(ids), 50):
+            if gen != self._gen["youtube"]:
+                return
+            query = urllib.parse.urlencode({"part": "contentDetails,snippet", "id": ",".join(ids[start:start + 50]),
+                                            "fields": "items(id,contentDetails/duration,snippet/publishedAt)", "key": key})
+            try:
+                with urllib.request.urlopen(f"https://www.googleapis.com/youtube/v3/videos?{query}", timeout=20) as r:
+                    items = json.load(r).get("items") or []
+            except (OSError, ValueError) as ex:
+                self._yt_api_gen = None  # fall back to the lazy per-card lookups
+                self._log("warning", "fetch", f"YouTube API: could not read durations and upload times ({type(ex).__name__})")
+                return
+            out = []
+            for it in items:
+                i = by_id.get(it.get("id"))
+                if i is None:
+                    continue
+                v = videos[i]
+                v["duration"] = v.get("duration") or iso_duration((it.get("contentDetails") or {}).get("duration"))
+                published = (it.get("snippet") or {}).get("publishedAt") or ""
+                try:
+                    v["uploaded"] = int(datetime.datetime.fromisoformat(published.replace("Z", "+00:00")).timestamp())
+                except ValueError:
+                    pass
+                out.append({"index": i, "duration": v.get("duration"), "uploaded": v.get("uploaded")})
+            if gen == self._gen["youtube"] and out:
+                self._emit("meta", kind="youtube", gen=gen, items=out)
 
     # ---------- facebook login ----------
     def fb_login(self):
@@ -759,7 +842,7 @@ class Api:
                                            self._cancel.is_set, yt_dlp.utils.DownloadCancelled)
                 elif kind == "instagram":
                     if not v.get("media"):
-                        v["media"], caption = instagram.resolve(v["id"])
+                        v["media"], caption, _ = instagram.resolve(v["id"])
                         v["title"] = v["title"] or caption
                     title = v["title"] or f"reel_{v['id']}"
                     name, _ = self._reserve_template(target_dir, title, f"reel_{v['id']}")
@@ -769,7 +852,7 @@ class Api:
                         file = instagram.download(v["media"], path, ffmpeg, progress, self._cancel.is_set,
                                                   yt_dlp.utils.DownloadCancelled)
                     except instagram.DownloadExpired:  # cached links went stale; read fresh ones
-                        v["media"], _ = instagram.resolve(v["id"])
+                        v["media"], _, _ = instagram.resolve(v["id"])
                         file = instagram.download(v["media"], path, ffmpeg, progress, self._cancel.is_set,
                                                   yt_dlp.utils.DownloadCancelled)
                 else:
@@ -872,8 +955,29 @@ class Api:
             webbrowser.open(url)
 
     def reveal_file(self, path):
-        if path and os.path.isfile(path):
-            subprocess.Popen(["explorer", f"/select,{os.path.normpath(path)}"])
+        """Open the file's folder in Explorer with the file selected.
+        Not `explorer /select,<path>` from a list: Python quotes the whole "/select,..." argument when the path has
+        a space, Explorer cannot parse that and opens Documents instead."""
+        if not path or not os.path.isfile(path):
+            return
+        path = os.path.normpath(os.path.abspath(path))
+        shell32, ole32 = ctypes.windll.shell32, ctypes.windll.ole32
+        shell32.ILCreateFromPathW.restype = ctypes.c_void_p
+        shell32.ILCreateFromPathW.argtypes = [ctypes.c_wchar_p]
+        shell32.SHOpenFolderAndSelectItems.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+        shell32.ILFree.argtypes = [ctypes.c_void_p]
+        ole32.CoInitialize(None)  # js_api calls run on worker threads
+        try:
+            pidl = shell32.ILCreateFromPathW(path)
+            if pidl:
+                try:
+                    if shell32.SHOpenFolderAndSelectItems(pidl, 0, None, 0) == 0:
+                        return
+                finally:
+                    shell32.ILFree(pidl)
+        finally:
+            ole32.CoUninitialize()
+        subprocess.Popen(f'explorer /select,"{path}"')  # fallback: quote only the path
 
     # ---------- niche & channel research ----------
     @staticmethod
@@ -1414,6 +1518,138 @@ class Api:
         self._emit("mergeDone", path=res["path"], name=os.path.basename(res["path"]), width=res["width"],
                    height=res["height"], duration=res["duration"], encoder=res["encoder"])
         self._notify("Merge finished", os.path.basename(res["path"]))
+
+    # ---------- smart cut (owner edition) ----------
+    def smartcut_state(self):
+        if not smartcut:
+            return {"ok": False, "error": "Not available in this edition."}
+        opts = {**smartcut.defaults(), **(load_settings().get("smartCut") or {})}
+        return {"ok": True, "opts": opts, "whisperModels": list(smartcut.WHISPER_MODELS),
+                "ollama": smartcut.ollama_models(), "cuda": smartcut.cuda_devices()}
+
+    def smartcut_start(self, path, opts):
+        if not smartcut:
+            return {"ok": False, "error": "Not available in this edition."}
+        if not path or not os.path.isfile(path):
+            return {"ok": False, "error": "Choose a video first."}
+        opts = {**smartcut.defaults(), **(opts or {})}
+        opts["count"] = min(max(int(opts["count"]), 1), 20)
+        opts["minLen"], opts["maxLen"] = sorted((min(max(float(opts["minLen"]), 5), 180), min(max(float(opts["maxLen"]), 5), 180)))
+        opts["style"] = "moments" if opts["style"] == "moments" else "series"
+        opts["target"] = min(max(float(opts["target"]), 20), 180)
+        if opts["style"] == "moments" and opts["maxLen"] - opts["minLen"] < 5:
+            return {"ok": False, "error": "Leave at least 5 seconds between the shortest and the longest clip."}
+        if opts["whisper"] not in smartcut.WHISPER_MODELS:
+            opts["whisper"] = "small"
+        if opts["reframe"] not in ("face", "center", "fit"):
+            opts["reframe"] = "face"
+        if opts["subPos"] not in smartcut.SUB_POSITIONS:
+            opts["subPos"] = "bottom"
+        save_setting("smartCut", opts)
+        if not self._run(self._smartcut_task, path, opts):
+            return {"ok": False, "error": "Another task is running."}
+        return {"ok": True}
+
+    def _smartcut_task(self, path, opts):
+        ffmpeg, ffprobe = self._tools()
+        self._edit_cancel.clear()
+        cancel = self._edit_cancel.is_set
+        info = editor.probe(ffprobe, path)
+        name = os.path.basename(path)
+
+        def progress(text, value):
+            self._emit("scProgress", text=text, value=value)
+
+        def log(message):
+            self._log("info", "smartcut", f"{name}: {message}")
+            self._emit("scLog", message=message)
+
+        clips = []
+        try:
+            data = smartcut.analyze(ffmpeg, path, info, opts, facebook.DATA_DIR, progress, cancel, log)
+            progress("Choosing the best moments…", 0.6)
+            if opts["style"] == "series":
+                moments, method = smartcut.series(data, info, opts, cancel, log)
+                if not moments:
+                    raise RuntimeError("Nothing to cut in this video.")
+                log(f"Series of {len(moments)} part(s), " + ("blocks chosen with the LLM" if method == "llm" else "heuristics")
+                    + ": " + "; ".join(f"Part {m['part']}: {round(m['length'])} s, {smartcut._fmt(m['start'])}-"
+                                       f"{smartcut._fmt(m['end'])}" for m in moments))
+            else:
+                moments, method = smartcut.pick(data, info, opts, cancel, log)
+                if not moments:
+                    raise RuntimeError("No moment fits the clip length - try a shorter minimum length.")
+                for m in moments:
+                    m["parts"] = [[m["start"], m["end"]]]
+                log(f"Picked {len(moments)} moment(s) with " + ("the LLM" if method == "llm" else "heuristics") + ": "
+                    + ", ".join(f"{smartcut._fmt(m['start'])}-{smartcut._fmt(m['end'])}" for m in moments))
+            self._emit("scPlan", method=method, moments=moments, language=data["language"])
+            progress("Looking for black bars…", 0.61)
+            bars = smartcut.detect_bars(path, info["duration"])
+            if bars and bars[0] * bars[1] < info["width"] * info["height"] * 0.96:
+                log(f"Black bars removed: the picture is {bars[0]}×{bars[1]}")
+            else:
+                bars = None
+            pic_w, pic_h = (bars[0], bars[1]) if bars else (info["width"], info["height"])
+            yunet = None
+            if opts["reframe"] == "face" and pic_w / pic_h > 9 / 16:
+                progress("Getting the face detector…", 0.62)
+                yunet = smartcut.ensure_yunet(os.path.join(facebook.DATA_DIR, "models"))
+            stem = os.path.splitext(name)[0]
+            folder = os.path.join(os.path.dirname(path), safe_name(f"{stem} - smart cut", fallback="smart cut"))
+            os.makedirs(folder, exist_ok=True)
+            span = 0.37 / len(moments)
+            for i, m in enumerate(moments):
+                if cancel():
+                    raise editor.Cancelled()
+                base = 0.62 + i * span
+                start, end = m["start"], m["end"]
+                keys_list = [[(0.0, 0.5)] for _ in m["parts"]]
+                if yunet:
+                    progress(f"Clip {i + 1}/{len(moments)}: following faces…", base)
+                    for k, (a, b) in enumerate(m["parts"]):
+                        samples = smartcut.track_faces(path, a, b, yunet, cancel, bars)
+                        cuts = [c - a for c in data["cuts"] if a < c < b]
+                        keys_list[k] = smartcut.camera_path(samples, cuts, (pic_h * 9 / 16) / pic_w)
+                subs = None
+                tmp_subs = os.path.join(folder, f".clip{i + 1}.ass")
+                label = f"Part {m['part']}/{m['of']}" if m.get("part") and opts["partLabel"] and m["of"] > 1 else ""
+                if (opts["subtitles"] and data["segments"]) or label:
+                    segs = data["segments"] if opts["subtitles"] else []
+                    if smartcut.write_ass(tmp_subs, segs, m["parts"], data["language"], opts["subPos"], label):
+                        subs = tmp_subs
+                title = m.get("title") or ""
+                if m.get("part"):  # series: "Part 2/3 · <caption>" for TikTok, "Part 2 - <caption>" as the file name
+                    stem_name = f"Part {m['part']} - {title}" if title else f"Part {m['part']}"
+                    title = f"Part {m['part']}/{m['of']}" + (f" · {title}" if title else "")
+                else:
+                    stem_name = f"{i + 1:02d} - {title or smartcut._fmt(start).replace(':', '.')}"
+                dst = editor.unique_output(folder, safe_name(stem_name, fallback=f"clip {i + 1}", limit=80))
+                last = [0.0]
+
+                def on_progress(frac, i=i, base=base):
+                    now = time.monotonic()
+                    if now - last[0] >= 0.25:
+                        last[0] = now
+                        progress(f"Clip {i + 1}/{len(moments)}: rendering… {round(frac * 100)}%", base + span * (0.3 + 0.7 * frac))
+
+                try:
+                    progress(f"Clip {i + 1}/{len(moments)}: rendering…", base + span * 0.3)
+                    smartcut.render(ffmpeg, path, dst, info, m["parts"], keys_list, subs, on_progress, cancel, opts["reframe"], bars)
+                finally:
+                    if subs:
+                        os.remove(subs)
+                clip = {"index": i, "path": dst, "name": os.path.basename(dst), "title": title, "reason": m.get("reason", ""),
+                        "start": start, "end": end, "score": m.get("score"),
+                        "length": round(sum(b - a for a, b in m["parts"]), 1), "shots": len(m["parts"])}
+                clips.append(clip)
+                self._emit("scClip", **clip)
+        except (editor.Cancelled, smartcut.Cancelled):
+            self._emit("scDone", clips=clips, cancelled=True)
+            return
+        self._log("success", "smartcut", f"{name}: {len(clips)} clip(s) made", os.path.dirname(clips[0]["path"]) if clips else "")
+        self._emit("scDone", clips=clips, cancelled=False, folder=os.path.dirname(clips[0]["path"]) if clips else "")
+        self._notify("Smart cut finished", f"{len(clips)} clips from {name}")
 
     # ---------- notifications & drag-drop ----------
     def _notify(self, title, message):
