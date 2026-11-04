@@ -3,8 +3,9 @@
 The buyer sends the Machine ID shown by the app; the seller signs it with tools/keygen.py (private key kept
 outside this repo) and sends back the key. A key only unlocks the machine it was made for, so it cannot be shared.
 
-Key = base32( version(1) | machine hash(8) | issued day(2) | expiry day(2, 0 = lifetime) | Ed25519 signature(64) ),
+Key v1 = base32( version(1) | machine hash(8) | issued day(2) | expiry day(2, 0 = lifetime) | Ed25519 signature(64) ),
 days counted from 2026-01-01.
+Key v2 (short test keys) = same, but issued / expiry are UTC minutes(4 each) counted from 2026-01-01.
 """
 import base64
 import ctypes
@@ -17,8 +18,10 @@ import ed25519
 
 PUBLIC_KEY = bytes.fromhex("ea31c3f423acf9ec94941ffc568585a320ef9634346fc8165b2456f6e68f9aeb")
 VERSION = 1
+VERSION_MINUTES = 2
 EPOCH = datetime.date(2026, 1, 1)
-PAYLOAD_LEN = 13
+EPOCH_UTC = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+PAYLOAD_LEN = {VERSION: 13, VERSION_MINUTES: 17}
 
 
 def _machine_guid():
@@ -60,10 +63,20 @@ def _day(d):
     return (d - EPOCH).days
 
 
-def make_key(secret, machine, days_valid=0, issued=None):
-    issued = issued or datetime.date.today()
-    expiry = _day(issued) + days_valid if days_valid else 0
-    payload = bytes([VERSION]) + machine + _day(issued).to_bytes(2, "big") + expiry.to_bytes(2, "big")
+def _minute(t):
+    return int((t - EPOCH_UTC).total_seconds() // 60)
+
+
+def make_key(secret, machine, days_valid=0, issued=None, minutes_valid=0):
+    """`minutes_valid` makes a v2 key that expires to the minute (for tests); otherwise a v1 key in days."""
+    if minutes_valid:
+        start = _minute(datetime.datetime.now(datetime.timezone.utc))
+        payload = (bytes([VERSION_MINUTES]) + machine + start.to_bytes(4, "big")
+                   + (start + minutes_valid).to_bytes(4, "big"))
+    else:
+        issued = issued or datetime.date.today()
+        expiry = _day(issued) + days_valid if days_valid else 0
+        payload = bytes([VERSION]) + machine + _day(issued).to_bytes(2, "big") + expiry.to_bytes(2, "big")
     raw = base64.b32encode(payload + ed25519.sign(secret, payload)).decode().rstrip("=")
     return "-".join(raw[i:i + 6] for i in range(0, len(raw), 6))
 
@@ -75,13 +88,22 @@ def check(key, machine=None):
         data = base64.b32decode(raw + "=" * (-len(raw) % 8))
     except ValueError:
         return {"ok": False, "reason": "This is not a valid license key."}
-    if len(data) != PAYLOAD_LEN + 64 or data[0] != VERSION:
+    size = PAYLOAD_LEN.get(data[0]) if data else None
+    if not size or len(data) != size + 64:
         return {"ok": False, "reason": "This is not a valid license key."}
-    payload, signature = data[:PAYLOAD_LEN], data[PAYLOAD_LEN:]
+    payload, signature = data[:size], data[size:]
     if not ed25519.verify(PUBLIC_KEY, payload, signature):
         return {"ok": False, "reason": "This license key is not genuine."}
     if payload[1:9] != (machine or machine_hash()):
         return {"ok": False, "reason": "This key was made for another computer. Send your Machine ID to get a key for this one."}
+    if payload[0] == VERSION_MINUTES:
+        issued = EPOCH_UTC + datetime.timedelta(minutes=int.from_bytes(payload[9:13], "big"))
+        expires = EPOCH_UTC + datetime.timedelta(minutes=int.from_bytes(payload[13:17], "big"))
+        local = expires.astimezone()
+        if datetime.datetime.now(datetime.timezone.utc) >= expires:
+            return {"ok": False, "reason": f"This license expired at {local:%Y-%m-%d %H:%M}."}
+        return {"ok": True, "reason": "", "issued": issued.astimezone().strftime("%Y-%m-%d %H:%M"),
+                "expires": local.strftime("%Y-%m-%d %H:%M")}
     issued = EPOCH + datetime.timedelta(days=int.from_bytes(payload[9:11], "big"))
     exp_day = int.from_bytes(payload[11:13], "big")
     expires = EPOCH + datetime.timedelta(days=exp_day) if exp_day else None

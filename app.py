@@ -49,10 +49,11 @@ LOG_FILE = os.path.join(facebook.DATA_DIR, "logs.jsonl")
 LICENSE_FILE = os.path.join(facebook.DATA_DIR, "license.key")
 OWNER = edition.EDITION == "owner"
 LOG_MAX_BYTES = 2_000_000
-LOG_EVENTS = {"list", "done", "editDone", "batchDone", "stripDone", "mergeDone", "fbExpired",
+LOG_EVENTS = {"list", "done", "editDone", "batchDone", "queueDone", "stripDone", "mergeDone", "fbExpired",
               "dyLoginRequired", "igLoginRequired"}
 TASK_SOURCES = {"_fetch_task": "fetch", "_download_task": "download", "_export_task": "editor", "_batch_task": "editor",
-                "_merge_task": "editor", "_strip_task": "editor", "_tt_post_task": "tiktok"}
+                "_merge_task": "editor", "_strip_task": "editor", "_export_many_task": "editor",
+                "_tt_post_task": "tiktok", "_tt_post_many_task": "tiktok"}
 DROP_KINDS = {**dict.fromkeys((".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"), "video"),
               **dict.fromkeys((".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"), "audio"),
               **dict.fromkeys((".png", ".jpg", ".jpeg", ".webp"), "image")}
@@ -361,9 +362,9 @@ class Api:
                       "\n".join([data.get("dir") or "", *failed]).strip())
         elif type_ == "editDone":
             self._log("success", "editor", f"Exported {data['name']} ({data['width']}×{data['height']}, {data['encoder']})", data["path"])
-        elif type_ in ("batchDone", "stripDone"):
+        elif type_ in ("batchDone", "queueDone", "stripDone"):
             failed = data.get("failed") or []
-            what = "Batch export" if type_ == "batchDone" else "Metadata strip"
+            what = {"batchDone": "Batch export", "queueDone": "Export all"}.get(type_, "Metadata strip")
             self._log("warning" if failed else "success", "editor", f"{what}: {data['ok']}/{data['total']} done", "\n".join(failed))
         elif type_ == "mergeDone" and not data.get("cancelled"):
             self._log("success", "editor", f"Merged into {data['name']} ({data['width']}×{data['height']})", data["path"])
@@ -402,6 +403,18 @@ class Api:
         self._log("success", "app", f"Grabber activated on {license.machine_id()}")
         return self.license_info()
 
+    def _watch_license(self):
+        """Re-check the saved key every minute so a key that expires while Grabber is open locks it again."""
+        while True:
+            time.sleep(60)
+            if not self._license["ok"]:
+                continue
+            result = license.check(self._license.get("key", ""))
+            if not result["ok"]:
+                self._license = {**result, "key": self._license.get("key", "")}
+                self._log("warning", "app", f"License stopped working: {result['reason']}")
+                self._emit("licenseRequired")
+
     # ---------- license keys (owner edition) ----------
     def keys_state(self):
         if not keygen:
@@ -415,11 +428,11 @@ class Api:
         self._log("info", "app", "License signing key ready", keygen.PRIVATE)
         return {"ok": True, "publicKey": pub, **self.keys_state()}
 
-    def keys_issue(self, machine, days=0, note=""):
+    def keys_issue(self, machine, days=0, note="", minutes=0):
         if not keygen:
             return {"ok": False, "error": "Not available in this edition."}
         try:
-            key = keygen.issue(machine, int(days or 0), (note or "").strip())
+            key = keygen.issue(machine, int(days or 0), (note or "").strip(), int(minutes or 0))
         except keygen.KeygenError as ex:
             return {"ok": False, "error": str(ex)}
         self._log("success", "app", f"License key issued for {license.machine_id(license.parse_machine_id(machine))}"
@@ -428,6 +441,8 @@ class Api:
 
     def init(self):
         threading.Thread(target=self._check_engine, daemon=True).start()
+        if not OWNER:
+            threading.Thread(target=self._watch_license, daemon=True).start()
         return {
             "edition": edition.EDITION,
             "license": self.license_info(),
@@ -990,10 +1005,10 @@ class Api:
         entry = research.NICHE_BY_ID.get(niche) or next(
             (n for n in research.NICHES if typed == n[1].casefold() or any(typed == k.casefold() for ks in n[2].values() for k in ks)), None)
         name, keywords = (entry[1], entry[2][lang][:2]) if entry else (niche, [niche])
-        topic_words = [name, *keywords, *(entry[2]["en"] if entry else [])]
+        topic_words = [name, *keywords, *entry[2]["en"]] if entry else []
         self._log("info", "research", f"Finding Shorts channels for “{name}” in {market}", ", ".join(keywords))
         found = r.find_channels(market, keywords, topic_words)
-        candidates = found[:15]
+        candidates = found[:25]
         if candidates:
             r.check_tiktok(candidates, stop_after=5)
         checked = [c for c in candidates if c.get("tiktok")]
@@ -1002,13 +1017,15 @@ class Api:
         picks = free[:5]
         for c in found:  # keep the saved run small: a few example Shorts per checked channel
             c["recent"] = c.get("recent", [])[:3] if c in candidates else []
+            c.pop("popular", None)
         run = {"market": market, "niche": name, "keywords": keywords, "at": time.strftime("%Y-%m-%d %H:%M"),
                "found": len(found), "picks": [c["id"] for c in picks],
                "channels": checked + [c for c in found if c not in candidates][:20]}
         with r._lock:
             r.cache.setdefault("runs", {})[market] = run
             r._save()
-        summary = ", ".join(c["title"] for c in picks) or "none"
+        summary = ", ".join(c["title"] + (" (only re-uploaded)" if c["tiktok"]["verdict"] == "reup" else "")
+                            for c in picks) or "none"
         self._log("success" if picks else "warning", "research",
                   f"{name} [{market}]: {len(picks)} promising channels not on TikTok", summary)
         self._emit("researchDone", kind="channels", run=run)
@@ -1026,6 +1043,7 @@ class Api:
         c = r.channel_by_url(url)
         r.check_tiktok([c])
         c["recent"] = c.get("recent", [])[:3]
+        c.pop("popular", None)
         self._emit("researchDone", kind="check", channel=c)
 
     def research_open(self, url):
@@ -1086,6 +1104,79 @@ class Api:
             return {"ok": False, "error": "Another task is running."}
         return {"ok": True}
 
+    def _save_tt_post(self, record):
+        posts = _read_json(TT_POSTS_FILE, [])
+        posts.append(record)
+        _write_json(TT_POSTS_FILE, posts[-500:])
+
+    def tt_post_many(self, req):
+        """Post several videos to one profile: {"profile", "review", "items": [{"file", "caption", "schedule"}]}."""
+        root = load_settings().get("ttChromeRoot") or ""
+        if not root:
+            return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first."}
+        profile = next((pr for pr in self.tt_state()["profiles"] if pr["dir"] == (req or {}).get("profile")), None)
+        if not profile:
+            return {"ok": False, "error": "Choose a Chrome profile."}
+        jobs = []
+        soon = datetime.datetime.now() + datetime.timedelta(minutes=15)
+        for n, it in enumerate(req.get("items") or [], 1):
+            if not os.path.isfile(it.get("file") or ""):
+                return {"ok": False, "error": f"Video {n}: the file no longer exists."}
+            when = None
+            if it.get("schedule"):
+                when = datetime.datetime.strptime(it["schedule"], "%Y-%m-%dT%H:%M")
+                if when < soon:
+                    return {"ok": False, "error": f"Video {n}: schedule at least 15 minutes from now."}
+            jobs.append({"video": it["file"], "caption": (it.get("caption") or "").strip(), "when": when})
+        if not jobs:
+            return {"ok": False, "error": "No videos to post."}
+        if not self._run(self._tt_post_many_task, root, profile, jobs, bool(req.get("review"))):
+            return {"ok": False, "error": "Another task is running."}
+        return {"ok": True}
+
+    def _tt_post_many_task(self, root, profile, jobs, review):
+        name = profile["name"]
+        self._log("info", "tiktok", f"{name}: start {len(jobs)} videos{' (stop before Post)' if review else ''}",
+                  "\n".join(os.path.basename(j["video"]) for j in jobs))
+
+        def status(text):
+            self._emit("status", text=f"{name}: {text}", progress=None)
+            self._log("info", "tiktok", f"{name}: {text}")
+
+        results = [None] * len(jobs)
+
+        def on_item(i, error):
+            job = jobs[i]
+            when = job["when"]
+            record = {"file": job["video"], "profile": profile["dir"], "profileName": name, "caption": job["caption"],
+                      "at": time.strftime("%Y-%m-%d %H:%M"), "when": when.strftime("%Y-%m-%d %H:%M") if when else "",
+                      "status": "failed" if error else "review" if review else "posted", "error": error or "",
+                      "country": profile["country"]}
+            results[i] = record
+            self._save_tt_post(record)
+            if error:
+                self._log("error", "tiktok", f"Video {i + 1}/{len(jobs)} to {name} failed: {error}", job["video"])
+            else:
+                done = "Ready for review in" if review else "Scheduled on" if when else "Posted to"
+                self._log("success", "tiktok", f"{done} {name}" + (f" for {record['when']}" if when else "")
+                          + f" — {os.path.basename(job['video'])}", job["caption"])
+            self._emit("ttBatchItem", index=i, state="failed" if error else "done", error=error or "")
+            self._emit("ttPosted", record=record, batch=True)
+
+        try:
+            tiktok.post_many(root, profile["dir"], jobs, profile["country"], review, status,
+                             shots_dir=os.path.join(facebook.DATA_DIR, "tiktok-errors"), on_item=on_item)
+        except Exception as ex:  # noqa: BLE001 - VPN / Chrome failed before any video: every video fails
+            error = str(ex) if isinstance(ex, (tiktok.PostError, tiktok.ChromeBusy)) else f"{type(ex).__name__}: {ex}"
+            for i in range(len(jobs)):
+                if results[i] is None:
+                    on_item(i, error)
+        ok = sum(1 for r in results if r and r["status"] != "failed")
+        verb = "ready for review" if review else "posted"
+        self._emit("status", text=f"{name}: {ok}/{len(jobs)} videos {verb}", progress=0)
+        self._emit("ttBatchDone", ok=ok, total=len(jobs), review=review)
+        self._notify("TikTok", f"{name}: {ok}/{len(jobs)} videos {verb}")
+
     def _tt_post_task(self, root, profile, file, caption, when, review):
         name = profile["name"]
         self._log("info", "tiktok", f"{name}: start {'scheduling for ' + when.strftime('%Y-%m-%d %H:%M') if when else 'posting now'}"
@@ -1109,9 +1200,7 @@ class Api:
         except Exception as ex:  # noqa: BLE001 - Playwright / network errors: report and keep the app alive
             record["status"], record["error"] = "failed", f"{type(ex).__name__}: {ex}"
             record["trace"] = traceback.format_exc()
-        posts = _read_json(TT_POSTS_FILE, [])
-        posts.append(record)
-        _write_json(TT_POSTS_FILE, posts[-500:])
+        self._save_tt_post(record)
         done = {"posted": "Scheduled on" if when else "Posted to", "review": "Ready for review in"}.get(record["status"])
         if done:
             self._log("success", "tiktok", f"{done} {name}" + (f" for {record['when']}" if when else "")
@@ -1339,7 +1428,8 @@ class Api:
         self._notifier = Notifier(self._window)
         from webview.dom import DOMEventHandler
         doc = self._window.dom.document
-        doc.events.dragover += DOMEventHandler(lambda e: None, prevent_default=True)
+        # dragover is cancelled in app.js: a pywebview handler serializes every event to Python (~0.4 s each,
+        # fired every ~50 ms while dragging), which froze the window during any drag. Only drop needs the paths.
         doc.events.drop += DOMEventHandler(self._on_drop, prevent_default=True)
 
     def _on_drop(self, event):
@@ -1368,6 +1458,49 @@ class Api:
         if not self._run(self._export_task, path, spec, dst):
             return {"ok": False, "error": "Another task is running."}
         return {"ok": True, "dst": dst}
+
+    def editor_export_many(self, jobs):
+        """Export several edited videos one after another: [{"path", "spec", "outName"}], each with its own edits."""
+        jobs = [j for j in (jobs or []) if os.path.isfile(j.get("path") or "")]
+        if not jobs:
+            return {"ok": False, "error": "No videos to export."}
+        if not self._run(self._export_many_task, jobs):
+            return {"ok": False, "error": "Another task is running."}
+        return {"ok": True}
+
+    def _export_many_task(self, jobs):
+        ffmpeg, ffprobe = self._tools()
+        self._edit_cancel.clear()
+        done, failed = 0, []
+        for idx, job in enumerate(jobs):
+            if self._edit_cancel.is_set():
+                self._emit("queueItem", index=idx, state="cancelled", pct=0)
+                continue
+            self._emit("queueItem", index=idx, state="working", pct=0)
+            last = [0.0]
+
+            def progress(frac, idx=idx):
+                now = time.monotonic()
+                if now - last[0] >= 0.25:
+                    last[0] = now
+                    self._emit("queueItem", index=idx, state="working", pct=round(frac * 100))
+                    self._emit("editProgress", value=(idx + frac) / len(jobs),
+                               text=f"Exporting video {idx + 1}/{len(jobs)}… {round(frac * 100)}%")
+
+            path = job["path"]
+            try:
+                info = editor.probe(ffprobe, path)
+                dst = editor.unique_output(os.path.dirname(path), safe_name((job.get("outName") or "").strip(), fallback="edited"))
+                res = editor.export(ffmpeg, path, dst, info, job["spec"], progress, self._edit_cancel.is_set)
+                done += 1
+                self._emit("queueItem", index=idx, state="done", pct=100, output=res["path"], name=os.path.basename(res["path"]))
+            except editor.Cancelled:
+                self._emit("queueItem", index=idx, state="cancelled", pct=0)
+            except Exception as ex:  # noqa: BLE001 - keep going with the other videos
+                failed.append(f"{os.path.basename(path)}: {ex}")
+                self._emit("queueItem", index=idx, state="failed", pct=0, error=str(ex)[:200])
+        self._emit("queueDone", total=len(jobs), ok=done, failed=failed[:20], cancelled=self._edit_cancel.is_set())
+        self._notify("Export finished", f"{done}/{len(jobs)} videos exported")
 
     def editor_cancel(self):
         self._edit_cancel.set()

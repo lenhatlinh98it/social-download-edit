@@ -8,6 +8,7 @@ const VERDICTS = {
   suspect: { label: "Check suspects", cls: "warn" },
   reup: { label: "Only re-uploads", cls: "warn" },
   none: { label: "Not on TikTok", cls: "good" },
+  unverified: { label: "Not verified — TikTok search blocked", cls: "warn" },
   error: { label: "Check failed", cls: "bad" },
 };
 const rsNum = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
@@ -61,7 +62,13 @@ function renderResearch() {
     const picks = rs.run.picks.map((id) => rs.run.channels.find((c) => c.id === id)).filter(Boolean);
     const others = rs.run.channels.filter((c) => !rs.run.picks.includes(c.id));
     parts.push(`<h3 class="rs-h">${esc(rs.run.niche)} · ${esc(rs.run.market)} <span class="muted">— ${rs.run.found} promising Shorts channels found, ${esc(rs.run.at)}</span></h3>`);
-    parts.push(picks.length ? `<div class="rs-sub">Top ${picks.length} not on TikTok yet</div>${picks.map((c, i) => channelCard(c, true, i + 1)).join("")}`
+    const reups = picks.filter((c) => c.tiktok?.verdict === "reup").length;
+    const pickTitle = reups ? `Top ${picks.length}: ${picks.length - reups} not on TikTok yet, ${reups} only re-uploaded by others` : `Top ${picks.length} not on TikTok yet`;
+    const unverified = rs.run.channels.filter((c) => c.tiktok?.verdict === "unverified").length;
+    if (unverified) {
+      parts.push(`<div class="tt-empty">TikTok refused searches (it asks to log in), so ${unverified} channel${unverified > 1 ? "s" : ""} could not be verified and ${unverified > 1 ? "are" : "is"} not suggested. Log in to TikTok in the Chrome Portable “Research” profile, then run Find channels again.</div>`);
+    }
+    parts.push(picks.length ? `<div class="rs-sub">${pickTitle}</div>${picks.map((c, i) => channelCard(c, true, i + 1)).join("")}`
       : '<div class="tt-empty">No checked channel is free on TikTok — try another niche.</div>');
     if (others.length) {
       parts.push(`<details class="rs-others"><summary>${others.length} other channels (on TikTok, or not checked)</summary>${others.map((c) => channelCard(c, false)).join("")}</details>`);

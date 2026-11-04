@@ -34,7 +34,7 @@ function renderKeys() {
   $("#keyList").innerHTML = st.issued.length ? st.issued.map((k, i) => `<div class="key-row">
       <span class="mono">${esc(k.date)}</span>
       <span class="mono">${esc(k.machine_id)}</span>
-      <span class="note" title="${esc(k.note)}">${esc(k.note || "—")} <span class="muted">· ${esc(k.days === "lifetime" ? "lifetime" : `${k.days} days`)}</span></span>
+      <span class="note" title="${esc(k.note)}">${esc(k.note || "—")} <span class="muted">· ${esc(k.days === "lifetime" || /min/.test(k.days) ? k.days : `${k.days} days`)}</span></span>
       <button class="btn ghost sm" data-i="${i}" type="button">Copy key</button>
     </div>`).join("") : '<div class="tt-empty">No keys issued yet.</div>';
 }
@@ -57,7 +57,10 @@ $("#keyForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const machine = $("#keyMachine").value.trim();
   if (!machine) { toast("error", "Paste the buyer's Machine ID"); return; }
-  const res = await api.keys_issue(machine, Number($("#keyDays").value), $("#keyNote").value);
+  const valid = $("#keyDays").value;  // "30" = days, "m5" = minutes (test keys)
+  const res = valid.startsWith("m")
+    ? await api.keys_issue(machine, 0, $("#keyNote").value, Number(valid.slice(1)))
+    : await api.keys_issue(machine, Number(valid), $("#keyNote").value);
   if (!res.ok) { toast("error", "Key not created", res.error); return; }
   $("#keyResultMachine").textContent = machine.toUpperCase();
   $("#keyResultText").value = res.key;
