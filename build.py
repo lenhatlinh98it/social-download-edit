@@ -19,6 +19,10 @@ def build():
     extra = []
     if os.path.isfile(os.path.join(ROOT, "bin", "ffmpeg.exe")):  # portable ffmpeg from setup.ps1
         extra = ["--add-binary", f"{os.path.join(ROOT, 'bin')}{os.pathsep}bin"]
+    import importlib.util
+    for pkg in ("faster_whisper", "ctranslate2"):  # Smart cut (owner edition): VAD model + CTranslate2 DLLs
+        if importlib.util.find_spec(pkg):
+            extra += ["--collect-all", pkg]
     PyInstaller.__main__.run([
         *extra,
         os.path.join(ROOT, "app.py"),

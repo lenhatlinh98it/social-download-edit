@@ -507,7 +507,9 @@ function syncPanel() {
   $("#edUndo").disabled = editHistory.index <= 0;
   $("#edRedo").disabled = editHistory.index >= editHistory.stack.length - 1;
   if (!editHistory.restoring && ed.loaded) scheduleCommit();
-  $$("#cropBox i").forEach((h) => (h.style.display = ratioValue() && h.dataset.h.length === 1 ? "none" : ""));
+  // no video loaded yet: "Original" has no frame size (this runs on every busy event, in any mode)
+  const locked = ed.info ? ratioValue() : null;
+  $$("#cropBox i").forEach((h) => (h.style.display = locked && h.dataset.h.length === 1 ? "none" : ""));
   const ready = ed.loaded && !ed.exporting && !state.busy;
   $("#edExport").disabled = !ready || zoomStraddles();
   $("#edStripOne").disabled = !ready;
@@ -1367,6 +1369,7 @@ handlers.filesDropped = async (e) => {
   const mode = $("#view-editor").dataset.mode;
   if (mode === "batch") return window.batchAdd(videos.map((f) => f.path));
   if (mode === "merge") return window.mergeAdd(videos.map((f) => f.path));
+  if (mode === "smartcut") return videos.length && window.scSetSource?.(videos[0].path);
   if (videos.length) await openQueue(videos.map((f) => f.path));
   if (audio && ed.loaded) await setMusic(audio.path);
   if (image && ed.loaded) await setLogo(image.path);

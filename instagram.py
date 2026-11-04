@@ -178,6 +178,17 @@ def _media(node):
     return {"mp4": mp4, "height": mp4_height}
 
 
+def _duration(node):
+    """Seconds: video_duration when present, else the DASH manifest's mediaPresentationDuration (PT10.96S)."""
+    if node.get("video_duration"):
+        return round(float(node["video_duration"]))
+    m = re.search(r'mediaPresentationDuration="PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?"', node.get("video_dash_manifest") or "")
+    if not m:
+        return None
+    h, mi, s = (float(x or 0) for x in m.groups())
+    return round(h * 3600 + mi * 60 + s) or None
+
+
 def _media_nodes(payloads):
     for payload in payloads:
         for node in _walk(payload):
@@ -242,6 +253,8 @@ def fetch_user_reels(url, on_progress=None, max_idle_rounds=4):
                         "title": _caption(node),
                         "thumb": _thumb(node),
                         "plays": node.get("play_count") or node.get("view_count") or node.get("video_view_count") or 0,
+                        "duration": _duration(node),  # the reels grid usually has neither: filled by resolve()
+                        "uploaded": node.get("taken_at"),
                     })
                 idle = 0 if new else idle + 1
                 if on_progress:
@@ -257,7 +270,8 @@ def fetch_user_reels(url, on_progress=None, max_idle_rounds=4):
 
 
 def resolve(code):
-    """Open the reel page and read its media links and caption: ({mp4, video?, audio?, height}, caption)."""
+    """Open the reel page and read its media links, caption and details:
+    ({mp4, video?, audio?, height}, caption, {duration, uploaded})."""
     with _profile_lock, sync_playwright() as p:
         ctx = _launch(p, headless=True)
         try:
@@ -266,7 +280,7 @@ def resolve(code):
             for _ in range(20):
                 for node in _media_nodes(_parse(page.evaluate(JSON_SCRIPTS_JS))):
                     if node["code"] == code and node.get("video_versions"):
-                        return _media(node), _caption(node)
+                        return _media(node), _caption(node), {"duration": _duration(node), "uploaded": node.get("taken_at")}
                 page.wait_for_timeout(500)
         finally:
             ctx.close()

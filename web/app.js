@@ -142,6 +142,46 @@ function showSkeletonOff(kind) {
   if ($(`#view-${kind} .card.skeleton`)) renderGrid(kind);
 }
 
+/* 90 -> "1m30s", 10 -> "10s", 1040 -> "17m20s", 3725 -> "1h2m5s" */
+function fmtLength(sec) {
+  sec = Math.round(Number(sec) || 0);
+  if (sec <= 0) return "";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return (h ? `${h}h` : "") + (m ? `${m}m` : "") + (s || (!h && !m) ? `${s}s` : "");
+}
+
+/* unix seconds -> "40 minutes ago", "1 day ago", "40 days ago" */
+function timeAgo(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Date.now() / 1000 - Number(ts));
+  const say = (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+  if (s < 60) return "just now";
+  if (s < 3600) return say(Math.floor(s / 60), "minute");
+  if (s < 86400) return say(Math.floor(s / 3600), "hour");
+  return say(Math.floor(s / 86400), "day");
+}
+
+function cardMetaHTML(v) {
+  const ago = timeAgo(v.uploaded);
+  return ago ? `<span title="${esc(new Date(v.uploaded * 1000).toLocaleString())}">${ago}</span>` : "";
+}
+
+/* duration / upload time arrived after the card was drawn */
+function updateCardMeta(kind, i) {
+  const card = cardEl(kind, i);
+  const v = state.lists[kind].videos[i];
+  if (!card || !v) return;
+  const len = fmtLength(v.duration);
+  let dur = $(".dur", card);
+  if (len && !dur) {
+    dur = document.createElement("div");
+    dur.className = "dur";
+    $(".thumb", card).appendChild(dur);
+  }
+  if (dur) dur.textContent = len;
+  $(".ago", card).innerHTML = cardMetaHTML(v);
+}
+
 function cardHTML(v, i) {
   const title = v.title || "Loading caption…";
   return `<div class="card" data-i="${i}">
@@ -151,9 +191,11 @@ function cardHTML(v, i) {
       <span class="badge"></span>
       <div class="check">${ICONS.check}</div>
       ${v.views ? `<div class="views">${v.stat === "likes" ? ICONS.heart : ICONS.play}${esc(v.views)}</div>` : ""}
+      ${v.duration ? `<div class="dur">${fmtLength(v.duration)}</div>` : ""}
       <div class="cbar"><i></i></div>
     </div>
     <div class="title${v.title ? "" : " pending"}" title="${esc(v.title)}">${esc(title)}</div>
+    <div class="ago">${cardMetaHTML(v)}</div>
   </div>`;
 }
 
@@ -209,10 +251,10 @@ function updateCounts() {
   syncDisabled();
 }
 
-/* ---------- Facebook / Instagram captions (lazy, for visible cards) ---------- */
-const LAZY_CAPTIONS = ["facebook", "instagram"];
+/* ---------- captions, durations and upload times (lazy, for visible cards) ---------- */
+const LAZY_CAPTIONS = ["facebook", "instagram", "youtube"];
 let captionTimer = null;
-const captionsRequested = { facebook: new Set(), instagram: new Set() };
+const captionsRequested = { facebook: new Set(), instagram: new Set(), youtube: new Set() };
 
 function setupCaptionObserver(view) {
   $(".grid-wrap", view).addEventListener("scroll", scheduleCaptions, { passive: true });
@@ -242,7 +284,7 @@ function requestVisibleCaptions() {
     const r = card.getBoundingClientRect();
     if (r.bottom < wrap.top - 300 || r.top > wrap.bottom + 300) continue;
     const i = Number(card.dataset.i);
-    if (!videos[i]?.title && !requested.has(i)) wanted.push(i);
+    if (videos[i] && (!videos[i].title || !videos[i].uploaded) && !requested.has(i)) wanted.push(i);
   }
   if (!wanted.length) return;
   wanted.forEach((i) => requested.add(i));
@@ -990,9 +1032,24 @@ const handlers = {
   caption: (e) => {
     const L = state.lists[e.kind];
     if (e.gen !== L.gen || !L.videos[e.index]) return;
-    L.videos[e.index].title = e.title;
+    const v = L.videos[e.index];
+    v.title = e.title;
+    if (e.duration) v.duration = e.duration;
+    if (e.uploaded) v.uploaded = e.uploaded;
     const t = $(".title", cardEl(e.kind, e.index) || document.createElement("div"));
     if (t) { t.textContent = e.title; t.title = e.title; t.classList.remove("pending"); }
+    updateCardMeta(e.kind, e.index);
+  },
+  meta: (e) => {
+    const L = state.lists[e.kind];
+    if (e.gen !== L.gen) return;
+    for (const it of e.items) {
+      const v = L.videos[it.index];
+      if (!v) continue;
+      if (it.duration) v.duration = it.duration;
+      if (it.uploaded) v.uploaded = it.uploaded;
+      updateCardMeta(e.kind, it.index);
+    }
   },
   item: (e) => {
     const card = cardEl(e.kind, e.index);
@@ -1048,7 +1105,8 @@ buildSourceView("douyin");
 buildSourceView("instagram");
 $$(".tab").forEach((t) => t.addEventListener("click", () => setView(t.dataset.view)));
 $("#folderBtn").addEventListener("click", chooseDir);
-$("#openDirBtn").addEventListener("click", () => api.open_folder(state.dir));
+// the folder shown next to it: the channel/page subfolder the videos are saved in
+$("#openDirBtn").addEventListener("click", () => api.open_folder($("#dirText").textContent || state.dir));
 $("#dlBtn").addEventListener("click", download);
 $("#markBtn").addEventListener("click", markDownloaded);
 $("#cancelBtn").addEventListener("click", () => { $("#cancelBtn").disabled = true; api.cancel_download(); });

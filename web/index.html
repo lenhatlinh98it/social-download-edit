@@ -244,7 +244,7 @@
       <section class="view" id="view-editor" data-mode="edit">
         <div class="ed-bar glass">
           <div class="seg ed-modes" id="edModes">
-            <button data-m="edit" class="on">Edit</button><button data-m="batch">Batch</button><button data-m="merge">Merge</button>
+            <button data-m="edit" class="on">Edit</button><button data-m="batch">Batch</button><button data-m="merge">Merge</button><button data-m="smartcut" class="owner-only">Smart cut</button>
           </div>
           <button class="btn primary sm edit-only" id="edOpen">
             <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -568,6 +568,78 @@
             </div>
           </aside>
         </div>
+
+        <div class="ed-body sc-only owner-only">
+          <div class="ed-stage glass list-stage">
+            <div class="list-head">
+              <b>Smart cut</b>
+              <span class="muted mono sc-source" id="scSource">Choose a long landscape video</span>
+              <div class="ed-spacer"></div>
+              <button class="btn ghost sm" id="scPick">Choose video…</button>
+            </div>
+            <div class="sc-url">
+              <input id="scUrl" placeholder="…or paste a YouTube / Douyin video link — it is downloaded, then cut" spellcheck="false">
+              <button class="btn ghost sm" id="scUseUrl">Use link</button>
+            </div>
+            <div class="file-list" id="scList"></div>
+            <div class="sc-log mono" id="scLog"></div>
+          </div>
+          <aside class="ed-side glass">
+            <div class="ed-group">
+              <div class="ed-title">Shorts</div>
+              <div class="chips" id="scStyle">
+                <button data-s="series" class="on" title="Part 1, Part 2… in story order: the important parts of the whole video, never cut mid-sentence">Series (Part 1, 2…)</button>
+                <button data-s="moments" title="Each short is one continuous moment of the video">Best moments</button>
+              </div>
+              <label class="ed-field"><span id="scCountLabel">How many parts</span><input type="number" id="scCount" min="1" max="20" value="2"></label>
+              <label class="ed-check" id="scPartLabelRow"><input type="checkbox" id="scPartLabel" checked> Show “Part 1/3” at the start of each part</label>
+              <div class="ed-title">Length of each short</div>
+              <div class="chips" id="scTarget">
+                <button data-t="60">1 min</button><button data-t="90" class="on">1:30</button><button data-t="120">2 min</button>
+                <button data-t="150">2:30</button>
+              </div>
+              <div class="chips" id="scLen">
+                <button data-l="15-30">15–30 s</button><button data-l="20-60" class="on">20–60 s</button>
+                <button data-l="30-90">30–90 s</button><button data-l="60-120">1–2 min</button>
+              </div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Reframe to 9:16</div>
+              <div class="chips" id="scReframe"><button data-r="face" class="on">Follow faces</button><button data-r="center">Centre</button><button data-r="fit" title="The whole frame on a blurred background - for slides, screen recordings and text">Fit + blur</button></div>
+              <label class="ed-check"><input type="checkbox" id="scSubs" checked> Captions — words light up as they are spoken</label>
+              <div class="chips" id="scSubPos"><button data-p="bottom" class="on">Bottom</button><button data-p="middle">Middle</button><button data-p="top">Top</button></div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">AI (runs on this computer)</div>
+              <label class="ed-field">Speech model
+                <select id="scWhisper"><option value="small">small — fast</option><option value="medium">medium</option>
+                  <option value="large-v3-turbo">large-v3-turbo — best (GPU)</option></select></label>
+              <label class="ed-field">Spoken language
+                <select id="scLang"><option value="">Detect</option><option value="en">English</option><option value="ja">Japanese</option>
+                  <option value="vi">Vietnamese</option><option value="ko">Korean</option><option value="zh">Chinese</option>
+                  <option value="es">Spanish</option><option value="pt">Portuguese</option><option value="de">German</option>
+                  <option value="fr">French</option></select></label>
+              <label class="ed-check"><input type="checkbox" id="scLlm" checked> Pick the moments with a local LLM (Ollama)</label>
+              <label class="ed-field">Ollama model<input id="scLlmModel" value="qwen2.5:7b" spellcheck="false"></label>
+              <div class="muted sc-ai" id="scAi"></div>
+            </div>
+            <div class="ed-group">
+              <div class="track" id="scTrack"><div class="fill" id="scFill"></div></div>
+              <div class="ed-status" id="scStatus">Ready</div>
+              <div class="ed-actions">
+                <button class="btn primary" id="scStart">Make clips</button>
+                <button class="btn danger hidden" id="scCancel">Cancel</button>
+              </div>
+              <div class="ed-done" id="scDone" hidden>
+                <div class="ed-actions">
+                  <button class="btn primary sm" id="scEdit">Open all in Editor</button>
+                  <button class="btn ghost sm" id="scPost">Post all to TikTok</button>
+                  <button class="btn ghost sm" id="scFolder">Show folder</button>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
       </section>
     </main>
 
@@ -731,5 +803,6 @@
   <script src="batch.js"></script>
   <script src="research.js"></script>
   <script src="keys.js"></script>
+  <script src="smartcut.js"></script>
 </body>
 </html>
