@@ -17,8 +17,9 @@ function scClock(t) {
 }
 
 function renderSc() {
-  $("#scSource").textContent = sc.source ? `${sc.source.name} · ${fmtDur(sc.source.duration)} · ${sc.source.width}×${sc.source.height}`
-    : "Choose a long landscape video";
+  $("#scSource").textContent = !sc.source ? "Choose a long landscape video"
+    : sc.source.url ? `Link: ${sc.source.url}`
+      : `${sc.source.name} · ${fmtDur(sc.source.duration)} · ${sc.source.width}×${sc.source.height}`;
   $("#scSource").title = sc.source?.path || "";
   const rows = sc.plan.map((m, i) => {
     const clip = sc.clips.find((c) => c.index === i);
@@ -41,7 +42,7 @@ function renderSc() {
   $("#scStart").disabled = !sc.source || sc.running || state.busy;
   $("#scStart").classList.toggle("hidden", sc.running);
   $("#scCancel").classList.toggle("hidden", !sc.running);
-  $("#scPick").disabled = sc.running;
+  $("#scPick").disabled = $("#scUseUrl").disabled = $("#scUrl").disabled = sc.running;
   $$("#scLen button").forEach((b) => b.classList.toggle("on", b.dataset.l === sc.len));
   $$("#scStyle button").forEach((b) => b.classList.toggle("on", b.dataset.s === sc.style));
   $$("#scTarget button").forEach((b) => b.classList.toggle("on", Number(b.dataset.t) === sc.target));
@@ -105,6 +106,26 @@ window.scSetSource = async (path) => {
 };
 
 $("#scPick").addEventListener("click", () => window.scSetSource(null));
+
+/* a YouTube / Douyin link: downloaded by Make clips, then cut */
+async function scUseUrl() {
+  const url = $("#scUrl").value.trim();
+  if (!url || sc.running) return;
+  const kind = await api.detect_kind(url);
+  if (kind !== "youtube" && kind !== "douyin") {
+    toast("error", "Not a YouTube or Douyin link", "Paste the link of one video, e.g. youtube.com/watch?v=… or douyin.com/video/…");
+    return;
+  }
+  sc.source = { url, path: url };
+  sc.plan = [];
+  sc.clips = [];
+  $("#scLog").textContent = "";
+  $("#scStatus").textContent = "Ready — the video is downloaded when you press Make clips";
+  $("#scFill").style.width = "0%";
+  renderSc();
+}
+$("#scUseUrl").addEventListener("click", scUseUrl);
+$("#scUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") scUseUrl(); });
 $("#scLen").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-l]");
   if (b) { sc.len = b.dataset.l; renderSc(); }
@@ -129,9 +150,8 @@ $("#scSubPos").addEventListener("click", (e) => {
 });
 $("#scLlmModel").addEventListener("change", scLoadState);
 $("#scStart").addEventListener("click", async () => {
-  if (!sc.source) return;
-  const res = await api.smartcut_start(sc.source.path, scOpts());
-  if (!res.ok) return toast("error", "Can't start Smart cut", res.error);
+  if (!sc.source || sc.running) return;
+  // running before the call: a run that fails at once (a bad link) can send its "busy: false" before this returns
   sc.running = true;
   sc.plan = [];
   sc.clips = [];
@@ -139,6 +159,13 @@ $("#scStart").addEventListener("click", async () => {
   $("#scStatus").textContent = "Starting…";
   $("#scFill").style.width = "0%";
   renderSc();
+  const res = await api.smartcut_start(sc.source.path, scOpts());
+  if (!res.ok) {
+    sc.running = false;
+    $("#scStatus").textContent = "Ready";
+    renderSc();
+    toast("error", "Can't start Smart cut", res.error);
+  }
 });
 $("#scCancel").addEventListener("click", () => api.editor_cancel());
 
@@ -159,6 +186,11 @@ $("#scList").addEventListener("click", (e) => {
 });
 
 Object.assign(handlers, {
+  scSource: (e) => {  // the link finished downloading: from now on it is this file
+    sc.source = { ok: true, path: e.path, name: e.name, duration: e.duration, width: e.width, height: e.height };
+    $("#scUrl").value = "";
+    renderSc();
+  },
   scProgress: (e) => {
     $("#scStatus").textContent = e.text;
     if (typeof e.value === "number") $("#scFill").style.width = `${Math.round(e.value * 100)}%`;

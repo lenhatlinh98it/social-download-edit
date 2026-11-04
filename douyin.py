@@ -204,6 +204,50 @@ def fetch_user_videos(url, on_progress=None, max_idle_rounds=4):
     return videos, nickname, limited
 
 
+DETAIL_API = "/aweme/v1/web/aweme/detail/"
+
+
+def resolve_video(url):
+    """One video from its link (douyin.com/video/<id>, ?modal_id=<id>, or a v.douyin.com short link):
+    {id, title, media, duration}. The page loads its own details from the detail API; we read that answer."""
+    details = []
+
+    def on_response(resp):
+        if DETAIL_API in resp.url:
+            try:
+                details.append(resp.json().get("aweme_detail") or {})
+            except Exception:  # noqa: BLE001 - blocked / non-JSON answer
+                pass
+
+    m = re.search(r"(?:/video/|modal_id=)(\d{8,})", url)
+    target = video_url(m.group(1)) if m else url
+    with sync_playwright() as p:
+        ctx = _launch(p, headless=True)
+        try:
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            page.on("response", on_response)
+            page.goto(target, wait_until="domcontentloaded", timeout=60000)
+            vid = m.group(1) if m else (re.search(r"/video/(\d{8,})", page.url) or [None, None])[1]
+            for _ in range(40):
+                aweme = next((d for d in details if d.get("aweme_id") and (not vid or d["aweme_id"] == vid)), None)
+                if aweme:
+                    break
+                page.wait_for_timeout(500)
+            login_wall = not aweme and page.get_by_text(LOGIN_DIALOG_TEXT).count() > 0
+        finally:
+            ctx.close()
+    if not aweme:
+        if login_wall:
+            raise LoginRequired("Douyin asks to log in before showing this video. Connect Douyin and try again.")
+        raise RuntimeError("Douyin did not return this video (it may be private, removed or need verification).")
+    video = aweme.get("video") or {}
+    media = _best_mp4(video)
+    if not media:
+        raise RuntimeError("This Douyin post has no video (photo posts cannot be cut).")
+    return {"id": aweme["aweme_id"], "title": _caption(aweme), "media": media,
+            "duration": round((aweme.get("duration") or video.get("duration") or 0) / 1000) or None}
+
+
 def download(media_url, path, on_progress=None, should_cancel=None, cancelled_exc=Exception, referer=REFERER):
     """Stream an MP4 to `path` (via `path.part`)."""
     req = urllib.request.Request(media_url, headers={"User-Agent": USER_AGENT, "Referer": referer})

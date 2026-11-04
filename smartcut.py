@@ -476,8 +476,12 @@ def series(data, info, opts, should_cancel, log):
         if model and p["text"]:
             p["title"] = llm_title(model, p["text"], p["part"], p["of"])
         if not p["title"] and p["text"]:  # the first whole sentence of the part that says something
-            sentences = [x for x in re.split(r"(?<=[.!?。！？])\s+", p["text"].strip()) if x]
-            p["title"] = next((x for x in sentences if len(x) >= (8 if CJK.search(x) else 20)), sentences[0])[:80]
+            # CJK text has no space after its full stops, and Whisper often joins whole paragraphs with commas
+            commas = r"|(?<=[，、,])(?=.{30})" if CJK.search(p["text"]) else ""
+            sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+|(?<=[。！？])" + commas, p["text"].strip()) if x.strip()]
+            title = next((x for x in sentences if len(x) >= (8 if CJK.search(x) else 20)), sentences[0])
+            limit = 40 if CJK.search(title) else 80
+            p["title"] = title if len(title) <= limit else title[:limit - 1].rstrip("，、, ") + "…"
     return plan, "llm" if model else "heuristic"
 
 

@@ -1528,9 +1528,14 @@ class Api:
                 "ollama": smartcut.ollama_models(), "cuda": smartcut.cuda_devices()}
 
     def smartcut_start(self, path, opts):
+        """`path`: a video file, or a YouTube / Douyin link that is downloaded first."""
         if not smartcut:
             return {"ok": False, "error": "Not available in this edition."}
-        if not path or not os.path.isfile(path):
+        path = (path or "").strip()
+        if re.match(r"^(https?://|www\.|youtu\.be/|v\.douyin\.com/)", path, re.I):
+            if detect_kind(path) not in ("youtube", "douyin"):
+                return {"ok": False, "error": "Paste a YouTube or Douyin video link."}
+        elif not path or not os.path.isfile(path):
             return {"ok": False, "error": "Choose a video first."}
         opts = {**smartcut.defaults(), **(opts or {})}
         opts["count"] = min(max(int(opts["count"]), 1), 20)
@@ -1550,12 +1555,63 @@ class Api:
             return {"ok": False, "error": "Another task is running."}
         return {"ok": True}
 
+    def _smartcut_download(self, url, progress, log, cancel):
+        """Download a YouTube / Douyin video into <download folder>/Smart cut (reused when already there)."""
+        folder = os.path.join(load_settings().get("dir") or DEFAULT_DIR, "Smart cut")
+        os.makedirs(folder, exist_ok=True)
+        if not url.startswith("http"):
+            url = "https://" + url
+        kind = detect_kind(url)
+        progress("Reading the link…", None)
+        if kind == "douyin":
+            v = douyin.resolve_video(url)
+            vid, title = v["id"], v["title"]
+        else:
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True}) as ydl:
+                info = ydl.extract_info(url, download=False, process=False)
+            if info.get("_type") in ("playlist", "multi_video"):
+                raise RuntimeError("This is a playlist or channel link - paste the link of one video.")
+            vid, title = info["id"], info.get("title") or info["id"]
+        tag = f"[{vid}]"
+        done = next((os.path.join(folder, f) for f in os.listdir(folder) if tag in f and f.endswith(".mp4")), None)
+        if done:
+            log(f"Already downloaded: {os.path.basename(done)}")
+            return done
+        dst = os.path.join(folder, safe_name(f"{title[:80]} {tag}", fallback=tag) + ".mp4")
+        log(f"Downloading “{title[:80]}”")
+        last = [0.0]
+
+        def report(frac):
+            now = time.monotonic()
+            if now - last[0] >= 0.3:
+                last[0] = now
+                progress(f"Downloading the video… {round(frac * 100)}%", frac)
+
+        if kind == "douyin":
+            return douyin.download(v["media"], dst, report, cancel, editor.Cancelled)
+
+        def hook(d):
+            if cancel():
+                raise yt_dlp.utils.DownloadCancelled("Cancelled by user")
+            size = d.get("total_bytes") or d.get("total_bytes_estimate")
+            if d.get("status") == "downloading" and size:
+                report(min(d["downloaded_bytes"] / size, 1))
+
+        opts = {"format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
+                "merge_output_format": "mp4", "outtmpl": {"default": dst[:-4] + ".%(ext)s"}, "noplaylist": True,
+                **({"ffmpeg_location": FFMPEG_DIR} if os.path.isfile(os.path.join(FFMPEG_DIR, "ffmpeg.exe")) else {}),
+                "quiet": True, "no_warnings": True, "noprogress": True, "progress_hooks": [hook]}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return downloaded_file(ydl.extract_info(url, download=True)) or dst
+        except yt_dlp.utils.DownloadCancelled:
+            raise editor.Cancelled() from None
+
     def _smartcut_task(self, path, opts):
         ffmpeg, ffprobe = self._tools()
         self._edit_cancel.clear()
         cancel = self._edit_cancel.is_set
-        info = editor.probe(ffprobe, path)
-        name = os.path.basename(path)
+        name = os.path.basename(path) if os.path.isfile(path) else path
 
         def progress(text, value):
             self._emit("scProgress", text=text, value=value)
@@ -1566,6 +1622,16 @@ class Api:
 
         clips = []
         try:
+            if not os.path.isfile(path):  # a link: download it, then cut the file
+                try:
+                    path = self._smartcut_download(path, progress, log, cancel)
+                except (douyin.LoginRequired, yt_dlp.utils.DownloadError) as ex:
+                    raise RuntimeError(re.sub(r"^ERROR:\s*", "", str(ex))) from None
+                name = os.path.basename(path)
+                p_info = editor.probe(ffprobe, path)
+                self._emit("scSource", path=path, name=name, duration=p_info["duration"], width=p_info["width"],
+                           height=p_info["height"])
+            info = editor.probe(ffprobe, path)
             data = smartcut.analyze(ffmpeg, path, info, opts, facebook.DATA_DIR, progress, cancel, log)
             progress("Choosing the best moments…", 0.6)
             if opts["style"] == "series":
