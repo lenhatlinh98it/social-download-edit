@@ -822,6 +822,18 @@ function updateTimeline() {
   $("#edTrim").textContent = `${fmt(ed.start)} – ${fmt(ed.end)}  (${fmt(ed.end - ed.start)})`;
 }
 
+/* the player handles one seek at a time: seeks piled up while dragging (more so at a speed other than 1×) can
+   break its demuxer ("demuxer seek failed") and freeze the preview, so a drag only keeps the latest target */
+let pendingSeek = null;
+function seekTo(t) {
+  if (video.seeking) {
+    pendingSeek = t;
+    return;
+  }
+  pendingSeek = null;
+  video.currentTime = t;
+}
+
 function timeAt(clientX) {
   const r = $("#timeline").getBoundingClientRect();
   return Math.min(Math.max((clientX - r.left) / r.width, 0), 1) * (ed.info?.duration || 0);
@@ -837,7 +849,7 @@ $("#timeline").addEventListener("pointerdown", (e) => {
     const t = timeAt(ev.clientX);
     if (target === "start") ed.start = Math.min(t, ed.end - 0.1);
     else if (target === "end") ed.end = Math.max(t, ed.start + 0.1);
-    video.currentTime = target === "end" ? ed.end : target === "start" ? ed.start : Math.min(Math.max(t, ed.start), ed.end);
+    seekTo(target === "end" ? ed.end : target === "start" ? ed.start : Math.min(Math.max(t, ed.start), ed.end));
     kick();
   };
   apply(e);
@@ -862,13 +874,36 @@ function togglePlay() {
 $("#edPlay").addEventListener("click", togglePlay);
 video.addEventListener("play", () => { $("#edPlay").classList.add("on"); syncMusic(true); kick(); });
 video.addEventListener("pause", () => { $("#edPlay").classList.remove("on"); syncMusic(true); kick(); });
-video.addEventListener("seeked", () => { syncMusic(true); kick(); });
+video.addEventListener("seeked", () => {
+  if (pendingSeek !== null) {
+    seekTo(pendingSeek);
+    return;
+  }
+  syncMusic(true);
+  kick();
+});
 video.addEventListener("loadeddata", kick);
 video.addEventListener("timeupdate", () => {
   if (!video.paused && video.currentTime >= ed.end) video.currentTime = ed.start; // loop inside the trim
 });
+/* a broken pipeline (network / decode error after heavy seeking) leaves the preview stuck "seeking" forever:
+   reload the same file at the same time instead; only an unsupported codec is reported */
+let lastRecover = 0;
 video.addEventListener("error", () => {
-  if (ed.loaded) toast("error", "Preview not supported", "This codec can't be previewed here, but exporting still works.");
+  if (!ed.loaded) return;
+  const code = video.error?.code;
+  if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || Date.now() - lastRecover < 3000) {
+    toast("error", "Preview not supported", "This codec can't be previewed here, but exporting still works.");
+    return;
+  }
+  lastRecover = Date.now();
+  const t = pendingSeek ?? video.currentTime;
+  const src = video.src;
+  pendingSeek = null;
+  video.removeAttribute("src");
+  video.load();
+  video.src = src;
+  video.addEventListener("loadedmetadata", () => { video.currentTime = t; video.playbackRate = ed.speed; }, { once: true });
 });
 document.addEventListener("keydown", (e) => {
   if (!ed.active || e.code !== "Space" || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) return;
@@ -968,6 +1003,7 @@ function selectQueueItem(i) {
   $("#edEmpty").classList.remove("on");
   $(".ed-panes").classList.add("on");
   $(".ed-transport").classList.add("on");
+  pendingSeek = null;
   video.src = item.url;
   video.currentTime = 0;
   if (item.snap) {
@@ -1226,7 +1262,7 @@ document.addEventListener("keydown", (e) => {
   if (key === "arrowleft" || key === "arrowright") {
     e.preventDefault();
     video.pause();
-    video.currentTime = Math.min(Math.max(video.currentTime + (key === "arrowleft" ? -step : step), 0), ed.info.duration);
+    seekTo(Math.min(Math.max((pendingSeek ?? video.currentTime) + (key === "arrowleft" ? -step : step), 0), ed.info.duration));
   } else if (key === "i") { ed.start = Math.min(video.currentTime, ed.end - 0.1); syncPanel(); }
   else if (key === "o") { ed.end = Math.max(video.currentTime, ed.start + 0.1); syncPanel(); }
   else if (key === "r") rotateBy(e.shiftKey ? -90 : 90);

@@ -1428,7 +1428,8 @@ class Api:
         self._notifier = Notifier(self._window)
         from webview.dom import DOMEventHandler
         doc = self._window.dom.document
-        doc.events.dragover += DOMEventHandler(lambda e: None, prevent_default=True)
+        # dragover is cancelled in app.js: a pywebview handler serializes every event to Python (~0.4 s each,
+        # fired every ~50 ms while dragging), which froze the window during any drag. Only drop needs the paths.
         doc.events.drop += DOMEventHandler(self._on_drop, prevent_default=True)
 
     def _on_drop(self, event):

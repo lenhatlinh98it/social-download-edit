@@ -59,7 +59,8 @@ AVATAR_SIMILAR = 10
 COVER_MATCH = 12
 FRAME_MATCH = 8  # dHash bits between two frames of the same footage (re-encoded, trimmed: 0-8; other footage ~20)
 MIN_FRAME_OVERLAP = 0.5  # of a TikTok clip's frames found in the Short = a copy
-FRAME_CHECKS = 3  # borderline title hits per channel confirmed by downloading both videos
+FRAME_CHECKS = 6  # title hits per channel confirmed by downloading both videos
+PROFILE_FRAME_CHECKS = 3  # same-name / same-title accounts per channel whose latest videos are compared by frames
 TITLE_SEARCHES = 6  # Shorts whose titles are searched on TikTok (most viewed first, then the latest)
 
 MARKETS = {
@@ -677,7 +678,7 @@ class Research:
             browser, page = tiktok._open_profile_page(p, self.chrome_root, RESEARCH_PROFILE)
             checker = _TikTokChecker(page, self)
             try:
-                free = 0
+                free, warned = 0, False
                 for i, c in enumerate(channels):
                     self._check_cancel()
                     self.progress("tiktok", f"TikTok check {i + 1}/{len(channels)}: {c['title']}", 0.5 + 0.5 * i / len(channels))
@@ -691,6 +692,11 @@ class Research:
                     self.log("info" if c["tiktok"]["verdict"] != "error" else "warning",
                              f"{c['title']}: TikTok {c['tiktok']['verdict']}",
                              "\n".join(f"{x['verdict']} {x['url']} — {'; '.join(x['evidence'])}" for x in c["tiktok"].get("candidates", [])))
+                    if c["tiktok"].get("blocked") and not warned:
+                        warned = True
+                        self.log("warning", f"TikTok refused some searches ({c['tiktok']['blocked']}): channels with no "
+                                            "account found are marked unverified, not “not on TikTok”. Log in to TikTok "
+                                            "in the Chrome Portable “Research” profile so searches work.")
                     free += c["tiktok"]["verdict"] == "none"
                     if stop_after and free >= stop_after:
                         break
@@ -701,7 +707,7 @@ class Research:
         return channels
 
 
-VERDICT_ORDER = {"exists": 0, "likely": 1, "suspect": 2, "reup": 3, "none": 4, "error": 5}
+VERDICT_ORDER = {"exists": 0, "likely": 1, "suspect": 2, "reup": 3, "unverified": 4, "none": 5, "error": 6}
 
 
 class _TikTokChecker:
@@ -714,12 +720,15 @@ class _TikTokChecker:
         self._hashes = {}
         self._tmp = tempfile.mkdtemp(prefix="grabber-research-")
         self._yt_frame_cache = {}
+        self.search_blocked = {}  # search endpoint -> TikTok's refusal ("2483 log in first")
+        self.searches = 0
+        self._search_cache = {}
 
     def close(self):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _on_response(self, resp):
-        if "tiktok.com/api/" in resp.url and any(k in resp.url for k in ("/search/user/full", "/search/item/full", "/post/item_list")):
+        if "tiktok.com/api/" in resp.url and any(k in resp.url for k in ("/search/general/full", "/post/item_list")):
             try:
                 self.api.append((resp.url, resp.json()))
             except Exception:  # noqa: BLE001 - empty / blocked body
@@ -806,47 +815,136 @@ class _TikTokChecker:
         out = []
         if h:
             out += [h, h.replace("-", "_"), re.sub(r"[-_.]", "", h)]
+            base = re.sub(r"\d+$", "", h)  # @yuu_meshi_recipe15 -> yuu_meshi_recipe, often yuu_meshi_recipe_ on TikTok
+            if base != h:
+                out += [base, base + "_"]
+        raw = unicodedata.normalize("NFKC", c.get("title") or "").casefold().strip()
+        if re.fullmatch(r"[a-z0-9_.]{3,24}", raw):  # a title that is itself a handle: ena_kazokugohan
+            out.append(raw)
         title = norm_name(c.get("title"))
         if re.fullmatch(r"[a-z0-9]{3,24}", title or ""):
             out.append(title)
-        return [v for v in dict.fromkeys(out) if re.fullmatch(r"[a-z0-9_.]{2,24}", v)][:4]
+        return [v for v in dict.fromkeys(out) if re.fullmatch(r"[a-z0-9_.]{2,24}", v)][:6]
+
+    def _mentioned_handles(self, c):
+        """@handles written in the channel description or the Shorts' descriptions: creators mostly use the same
+        handle on Instagram and TikTok ("お仕事のご依頼はInstagramのDMまで @yuu_meshi_recipe_")."""
+        texts = [c.get("description", "")] + [v.get("description", "") for v in [*c.get("recent", [])[:20], *c.get("popular", [])]]
+        found = []
+        for t in texts:
+            found += re.findall(r"(?<![\w@])@([A-Za-z0-9_.]{3,24})", t)
+        return list(dict.fromkeys(h.rstrip(".").lower() for h in found))[:5]
+
+    def _blocked(self, endpoint):
+        """TikTok answers a search it won't serve to this session (e.g. "log in first", status 2483) with an empty
+        list and a non-zero status_code: remember it, so an empty result is not read as "nothing on TikTok"."""
+        for url, body in self.api:
+            if endpoint in url and body and body.get("status_code"):
+                self.search_blocked[endpoint] = f"{body.get('status_code')} {body.get('status_msg') or ''}".strip()
+                return True
+        return False
+
+    def _search(self, q):
+        """Search TikTok the way a visitor does: type into the search box and press Enter. Opening
+        /search/user?q=… or /search/video?q=… directly is refused for a guest ("log in first", status 2483),
+        while the box's general search answers with videos (and their authors) plus a few matching users.
+        Returns {"users": [...], "videos": [...]}; one search serves both lists, cached per query."""
+        if q in self._search_cache:
+            return self._search_cache[q]
+        res = {"users": [], "videos": []}
+        wait = 1.5 - (time.time() - self._last)
+        if wait > 0:
+            time.sleep(wait)
+        self._last = time.time()
+        for attempt in range(2):
+            try:
+                self._close_login_popup()
+                box = self.page.locator('[data-e2e="search-user-input"]:visible').first
+                if "tiktok.com" not in self.page.url or not box.count() or attempt:
+                    self.page.goto("https://www.tiktok.com/", wait_until="domcontentloaded", timeout=60000)
+                    self.page.wait_for_timeout(3000)
+                    self._wait_captcha()
+                    self._close_login_popup()
+                    box = self.page.locator('[data-e2e="search-user-input"]:visible').first
+                    if not box.count():
+                        self.page.locator('button[data-e2e="nav-search"]:visible').first.click(timeout=10000)
+                        self.page.wait_for_timeout(800)
+                        box = self.page.locator('[data-e2e="search-user-input"]:visible').first
+                box.fill(q, timeout=10000)
+                self.api.clear()
+                with self.page.expect_response(lambda r: "/api/search/general/full" in r.url, timeout=30000):
+                    box.press("Enter")
+                self.page.wait_for_timeout(1500)
+                self._wait_captcha()
+                break
+            except PlaywrightError as ex:  # TimeoutError is a PlaywrightError too; a login popup may cover the box
+                if attempt:
+                    self.search_blocked["general"] = f"search box failed: {str(ex).splitlines()[0][:80]}"
+                    return res
+        self.searches += 1
+        if self._blocked("/search/general/full"):
+            return res
+        seen = set()
+        for url, body in self.api:
+            if "/search/general/full" not in url or not body:
+                continue
+            for d in body.get("data") or []:
+                for it in d.get("user_list") or []:
+                    ui = it.get("user_info") or {}
+                    if ui.get("unique_id") and ui["unique_id"].lower() not in seen:
+                        seen.add(ui["unique_id"].lower())
+                        res["users"].append({"handle": ui["unique_id"], "nickname": ui.get("nickname", ""),
+                                             "followers": ui.get("follower_count", 0),
+                                             "avatar": ((ui.get("avatar_thumb") or {}).get("url_list") or [""])[0]})
+                it = d.get("item")
+                if not it:
+                    continue
+                a, v = it.get("author") or {}, it.get("video") or {}
+                if not a.get("uniqueId"):
+                    continue
+                res["videos"].append({"handle": a["uniqueId"], "nickname": a.get("nickname", ""), "desc": it.get("desc", ""),
+                                      "id": it.get("id", ""), "seconds": v.get("duration", 0),
+                                      "cover": v.get("cover") or v.get("originCover") or "",
+                                      "play": v.get("playAddr") or v.get("downloadAddr") or ""})
+                if a["uniqueId"].lower() not in seen:  # the authors of matching videos are user hits too
+                    seen.add(a["uniqueId"].lower())
+                    res["users"].append({"handle": a["uniqueId"], "nickname": a.get("nickname", ""),
+                                         "followers": (it.get("authorStats") or {}).get("followerCount", 0),
+                                         "avatar": a.get("avatarThumb") or a.get("avatarMedium") or ""})
+        res["users"], res["videos"] = res["users"][:12], res["videos"][:12]
+        self._search_cache[q] = res
+        return res
+
+    def _close_login_popup(self):
+        """A guest sometimes gets the log in / sign up popup over the page: close it with its X (or Escape)."""
+        close = self.page.locator('[data-e2e="modal-close-inner-button"]:visible, [role="dialog"] [aria-label="Close"]:visible, '
+                                  '[role="dialog"] [aria-label="閉じる"]:visible, [role="dialog"] [aria-label="关闭"]:visible')
+        try:
+            if close.count():
+                close.first.click(timeout=5000)
+                self.page.wait_for_timeout(600)
+            elif self.page.locator('[role="dialog"]:visible').count():
+                self.page.keyboard.press("Escape")
+                self.page.wait_for_timeout(600)
+        except PlaywrightError:
+            pass
 
     def _search_users(self, q):
-        out = []
-        if not self._goto(f"https://www.tiktok.com/search/user?q={urllib.parse.quote(q)}"):
-            return out
-        for url, body in self.api:
-            if "/search/user/full" in url and body:
-                for it in body.get("user_list") or []:
-                    ui = it.get("user_info") or {}
-                    if ui.get("unique_id"):
-                        out.append({"handle": ui["unique_id"], "nickname": ui.get("nickname", ""),
-                                    "followers": ui.get("follower_count", 0),
-                                    "avatar": ((ui.get("avatar_thumb") or {}).get("url_list") or [""])[0]})
-        return out[:10]
+        return self._search(q)["users"]
 
     def _search_videos(self, q):
-        out = []
-        if not self._goto(f"https://www.tiktok.com/search/video?q={urllib.parse.quote(q)}"):
-            return out
-        for url, body in self.api:
-            if "/search/item/full" in url and body:
-                for it in body.get("item_list") or []:
-                    a, v = it.get("author") or {}, it.get("video") or {}
-                    if a.get("uniqueId"):
-                        out.append({"handle": a["uniqueId"], "nickname": a.get("nickname", ""), "desc": it.get("desc", ""),
-                                    "id": it.get("id", ""), "seconds": v.get("duration", 0),
-                                    "cover": v.get("cover") or v.get("originCover") or "",
-                                    "play": v.get("playAddr") or v.get("downloadAddr") or ""})
-        return out[:12]
+        return self._search(q)["videos"]
 
     def _same_video(self, yt_video, yt_thumb, secs, desc, cover_url):
-        """A TikTok video is a copy of a YouTube Short: the same title with about the same length (re-uploads trim a
-        few seconds), or near-same length and the same cover frame."""
+        """How a TikTok video matches a YouTube Short: "cover" (near-same length and the same cover frame: a copy),
+        "title" (the same title, about the same length: re-uploads trim a few seconds, but short titles such as a
+        dish name are shared by many creators, so it needs the frames to confirm) or None."""
         gap = abs(yt_video["seconds"] - secs)
+        if gap <= 8 and hamming(self._hash_url(cover_url, via_page=True), yt_thumb) <= COVER_MATCH:
+            return "cover"
         if gap <= 12 and similarity(clean_title(yt_video["title"]), clean_title(desc)) >= 0.6:
-            return True
-        return gap <= 8 and hamming(self._hash_url(cover_url, via_page=True), yt_thumb) <= COVER_MATCH
+            return "title"
+        return None
 
     def _download(self, url, name, referer=None):
         path = os.path.join(self._tmp, name)
@@ -872,6 +970,21 @@ class _TikTokChecker:
             self._yt_frame_cache[yv["id"]] = frame_hashes(self.r.ffmpeg, path) if path and os.path.exists(path) else []
         return self._yt_frame_cache[yv["id"]]
 
+    def _profile_frame_matches(self, refs, n_tiktok=4, n_youtube=6):
+        """How many of the opened profile's latest videos show footage of the channel's Shorts (most viewed first)."""
+        yt = [h for yv in sorted(refs, key=lambda v: v["views"], reverse=True)[:n_youtube] for h in self._yt_frames(yv)]
+        if not yt:
+            return 0
+        matches = 0
+        for it in self._items()[:n_tiktok]:
+            self.r._check_cancel()
+            v = it.get("video") or {}
+            url = v.get("playAddr") or v.get("downloadAddr")
+            path = self._download(url, f"tt_{it.get('id')}.mp4", referer="https://www.tiktok.com/") if url else None
+            if path and frames_overlap(frame_hashes(self.r.ffmpeg, path), yt) >= MIN_FRAME_OVERLAP:
+                matches += 1
+        return matches
+
     def _frames_match(self, yv, hit):
         """Download both videos and compare their frames: settles hits whose title / length only roughly agree."""
         if not hit.get("play"):
@@ -886,11 +999,20 @@ class _TikTokChecker:
         if not self._goto(f"https://www.tiktok.com/@{handle}", settle=4500):
             return None
         u = self._user_detail()
+        if not u and "/@" in self.page.url:
+            # the profile sometimes comes back without its data (popup, slow load): skipping it here once let the
+            # channel's own account go unnoticed, so close the popup and load it again before giving up
+            self._close_login_popup()
+            if self._goto(f"https://www.tiktok.com/@{handle}", settle=6000):
+                u = self._user_detail()
         if not u:
             return None
         ev, score = [], 0
         name_sim = max(similarity(c["title"], u["nickname"]), similarity(c["title"], u["handle"]),
                        similarity(c.get("handle", ""), u["handle"]), similarity(c.get("handle", ""), u["nickname"]))
+        # the display name alone: handles are what we guessed from the channel name, so a handle match proves little
+        # (@acperformance is someone else's account)
+        nick_sim = max(similarity(c["title"], u["nickname"]), similarity(c.get("handle", ""), u["nickname"]))
         if name_sim >= 0.6:
             ev.append(f"name {int(name_sim * 100)}% similar")
             score += int(name_sim * 30)
@@ -907,20 +1029,24 @@ class _TikTokChecker:
         elif av <= AVATAR_SIMILAR:
             ev.append(f"similar avatar (hash distance {av})")
             score += 15
-        matches = 0
+        matches = titles = 0
         for it in self._items()[:16]:
             v = it.get("video") or {}
-            if any(self._same_video(yv, th, v.get("duration", 0), it.get("desc", ""), v.get("cover") or v.get("originCover"))
-                   for yv, th in zip(refs, yt_thumbs)):
+            levels = {self._same_video(yv, th, v.get("duration", 0), it.get("desc", ""), v.get("cover") or v.get("originCover"))
+                      for yv, th in zip(refs, yt_thumbs)}
+            if "cover" in levels:
                 matches += 1
+            elif "title" in levels:
+                titles += 1
         if matches:
             ev.append(f"{matches} recent video(s) are copies of this channel's Shorts")
             score += min(matches, 5) * 15
         return {"handle": u["handle"], "url": f"https://www.tiktok.com/@{u['handle']}", "nickname": u["nickname"],
-                "followers": u["followers"], "videos": u["videos"], "nameSim": round(name_sim, 2), "avatarDistance": av,
-                "videoMatches": matches, "reverseLink": reverse, "score": score, "evidence": ev}
+                "followers": u["followers"], "videos": u["videos"], "nameSim": round(name_sim, 2), "nickSim": round(nick_sim, 2), "avatarDistance": av,
+                "videoMatches": matches, "titleMatches": titles, "reverseLink": reverse, "score": score, "evidence": ev}
 
     def check(self, c):
+        self.search_blocked = {}
         found_links = self._links_from_youtube(c)
         yt_avatar = self._hash_url(c.get("avatar"))
         # the latest Shorts plus the most viewed ones of all time: re-uploaders copy the hits, often months later
@@ -936,25 +1062,36 @@ class _TikTokChecker:
 
         for h in found_links:
             add(h, "linked from YouTube")
+        for h in self._mentioned_handles(c):
+            add(h, "handle written on YouTube")
         for h in self._handle_variants(c):
             add(h, "same handle as YouTube")
 
+        # search by the channel name and by its YouTube handle (a Japanese handle like @えなごはん is what people search)
         names = [c["title"]]
         short_title = re.sub(r"[【\[(（].*?[】\])）]", "", c["title"]).strip()
         if short_title and short_title != c["title"]:
             names.append(short_title)
+        yt_handle = re.sub(r"-[a-z0-9]{3}$", "", (c.get("handle") or "").lstrip("@"))
+        if yt_handle and norm_name(yt_handle) not in {norm_name(n) for n in names}:
+            names.append(yt_handle)
         seen_users = set()
-        for q in names[:2]:
+        same_name = 0
+        for q in names[:3]:
             self.r._check_cancel()
             for u in self._search_users(q):
                 h = u["handle"].lower()
-                sim = max(similarity(q, u["nickname"]), similarity(q, u["handle"]))
+                sim = max(similarity(n, u["nickname"]) for n in names) if names else 0
+                sim = max(sim, max(similarity(n, u["handle"]) for n in names))
                 if h in seen_users or sim < 0.5:
                     continue
                 seen_users.add(h)
                 av = hamming(self._hash_url(u["avatar"], via_page=True), yt_avatar)
                 if av <= AVATAR_SIMILAR:
                     add(h, f"user search “{q}” + similar avatar")
+                elif sim >= 0.8 and same_name < 3:  # same name, other avatar: open it and compare the videos
+                    same_name += 1
+                    add(h, f"user search “{q}”: same name")
                 elif sim >= 0.8:
                     lookalikes.append({"handle": u["handle"], "url": f"https://www.tiktok.com/@{u['handle']}",
                                        "nickname": u["nickname"], "followers": u["followers"], "nameSim": round(sim, 2),
@@ -976,14 +1113,16 @@ class _TikTokChecker:
             for rank, hit in enumerate(self._search_videos(q)):
                 link =f"https://www.tiktok.com/@{hit['handle']}/video/{hit['id']}"
                 gap = abs(yv["seconds"] - hit["seconds"])
-                if self._same_video(yv, th, hit["seconds"], hit["desc"], hit["cover"]):
+                level = self._same_video(yv, th, hit["seconds"], hit["desc"], hit["cover"])
+                if level == "cover":
                     reposts.setdefault(hit["handle"].lower(), []).append(link)
-                elif (rank < 5 and frame_checks and gap <= 20
-                      and similarity(q, clean_title(hit["desc"])) >= 0.35):
-                    frame_checks -= 1
-                    if self._frames_match(yv, hit):
-                        reposts.setdefault(hit["handle"].lower(), []).append(link)
-                    elif yv["seconds"] >= 20 and gap <= 8:
+                elif level == "title" or (rank < 5 and gap <= 20 and similarity(q, clean_title(hit["desc"])) >= 0.35):
+                    if frame_checks:  # a shared title is not proof: compare the footage
+                        frame_checks -= 1
+                        if self._frames_match(yv, hit):
+                            reposts.setdefault(hit["handle"].lower(), []).append(link)
+                            continue
+                    if level == "title" or (rank < 5 and yv["seconds"] >= 20 and gap <= 8):
                         possible.setdefault(hit["handle"].lower(), []).append(link)
                 elif rank < 5 and yv["seconds"] >= 20 and gap <= 8:
                     possible.setdefault(hit["handle"].lower(), []).append(link)
@@ -993,7 +1132,8 @@ class _TikTokChecker:
             add(h, "possible copy (top result for a Short's title, same length)")
 
         results = []
-        for h, why in list(cands.items())[:10]:
+        frame_checks = PROFILE_FRAME_CHECKS
+        for h, why in list(cands.items())[:12]:
             self.r._check_cancel()
             info = self._inspect(h, c, yt_avatar, refs, yt_thumbs)
             if not info:
@@ -1002,6 +1142,19 @@ class _TikTokChecker:
             if why == "linked from YouTube":
                 info["evidence"].insert(0, "YouTube channel links to this TikTok")
                 info["score"] += 100
+            if why == "handle written on YouTube":
+                info["evidence"].insert(0, "this handle is written on the YouTube channel")
+                info["score"] += 40
+            # same name (or a handle the channel writes) but nothing else in common yet: compare the actual footage
+            if (not info["videoMatches"] and frame_checks and info["avatarDistance"] > AVATAR_MATCH
+                    and (info["nickSim"] >= 0.8 or why == "handle written on YouTube" or info["titleMatches"])):
+                frame_checks -= 1
+                n = self._profile_frame_matches(refs)
+                if n:
+                    info["videoMatches"] = n
+                    info["frameMatches"] = n
+                    info["evidence"].append(f"{n} of its latest videos show the same footage as this channel's Shorts")
+                    info["score"] += 30 * n
             if h in reposts:
                 info["videoMatches"] = max(info["videoMatches"], len(reposts[h]))
                 info["evidence"].append(f"found by video search: {len(reposts[h])} copied Short(s)")
@@ -1016,24 +1169,40 @@ class _TikTokChecker:
         verdict = "none"
         for r in results:
             linked = r["why"] == "linked from YouTube" or r["reverseLink"]
+            written = r["why"] == "handle written on YouTube"
             same_av, near_av = r["avatarDistance"] <= AVATAR_MATCH, r["avatarDistance"] <= AVATAR_SIMILAR
-            if linked or (same_av and (r["nameSim"] >= 0.6 or r["videoMatches"] >= 1)):
+            if (linked or (same_av and (r["nameSim"] >= 0.6 or r["videoMatches"] >= 1))
+                    or (r.get("frameMatches") and (r["nickSim"] >= 0.8 or written))
+                    or (written and (r["nickSim"] >= 0.6 or near_av or r["videoMatches"] >= 1))):
                 r["verdict"] = "exists"
             elif (same_av or (near_av and (r["nameSim"] >= 0.6 or r["videoMatches"] >= 1))
-                  or (r["nameSim"] >= 0.8 and r["videoMatches"] >= 3)):  # same name posting many of the Shorts
+                  or (r["nickSim"] >= 0.8 and r["videoMatches"] >= 3)):  # same name posting many of the Shorts
                 r["verdict"] = "likely"
-            elif near_av or (r["nameSim"] >= 0.8 and r["videoMatches"] >= 1):
+            elif (near_av or (r["nickSim"] >= 0.8 and r["videoMatches"] >= 1)
+                  or (r["nickSim"] >= 0.95 and r["followers"] >= 1000)):  # the very same display name, a real account
                 r["verdict"] = "suspect"
-            elif r["videoMatches"] >= 1 or r.get("possibleCopies"):
+                if r["nickSim"] >= 0.95 and not (near_av or r["videoMatches"]):
+                    r["evidence"].append("same name with a real following, nothing else in common — check it is the same creator")
+            elif r["videoMatches"] >= 1 or r.get("possibleCopies", 0) >= 2:
                 r["verdict"] = "reup"
                 r["evidence"].append("re-uploads this channel's videos (different name and avatar: probably not the owner)"
                                      if r["videoMatches"] else "may re-upload this channel's videos — check the example links")
             else:
                 r["verdict"] = "none"
+                if r.get("possibleCopies"):  # one unconfirmed hit: listed for a manual look, not a verdict
+                    lookalikes.append({"handle": r["handle"], "url": r["url"], "nickname": r["nickname"],
+                                       "followers": r["followers"], "nameSim": r["nameSim"], "examples": r.get("examples", []),
+                                       "evidence": ["one video with a similar title and length — not confirmed by the footage"]})
             if VERDICT_ORDER[r["verdict"]] < VERDICT_ORDER[verdict]:
                 verdict = r["verdict"]
         results = [r for r in results if r["verdict"] != "none"]
         results.sort(key=lambda r: (VERDICT_ORDER[r["verdict"]], -r["score"]))
         lookalikes = [x for x in lookalikes if x["handle"].lower() not in {r["handle"].lower() for r in results}]
-        return {"verdict": verdict, "candidates": results[:6], "lookalikes": lookalikes[:5],
-                "checked": len(cands), "youtubeLinks": found_links}
+        out = {"verdict": verdict, "candidates": results[:6], "lookalikes": lookalikes[:5],
+               "checked": len(cands), "youtubeLinks": found_links}
+        if self.search_blocked:
+            # nothing found, but TikTok refused some searches: "none" would be a guess
+            out["blocked"] = "; ".join(f"TikTok search: {v}" for v in dict.fromkeys(self.search_blocked.values()))
+            if verdict == "none":
+                out["verdict"] = "unverified"
+        return out

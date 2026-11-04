@@ -1036,6 +1036,9 @@ $("#licForm").addEventListener("submit", async (e) => {
   toast("success", "Grabber activated", "Thank you! This computer is now licensed.");
 });
 
+// allow dropping files anywhere; the drop itself goes to Python (app._on_drop) for the full paths
+document.addEventListener("dragover", (e) => e.preventDefault());
+
 window.addEventListener("pywebviewready", async () => {
   api = window.pywebview.api;
   const init = await api.init();
