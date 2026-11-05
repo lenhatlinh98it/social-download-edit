@@ -1155,6 +1155,19 @@ class Api:
         if host.endswith(("youtube.com", "tiktok.com")) or host == "console.cloud.google.com":
             webbrowser.open(url)
 
+    def research_login(self):
+        """Open the Research Chrome profile on the TikTok login page so the user can sign in there themselves."""
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
+        root = load_settings().get("ttChromeRoot")
+        if not root:
+            return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first."}
+        try:
+            tiktok._open_window(root, research.RESEARCH_PROFILE, "https://www.tiktok.com/login")
+        except (tiktok.PostError, OSError) as ex:
+            return {"ok": False, "error": str(ex)}
+        return {"ok": True}
+
     # ---------- TikTok posting (Chrome Portable profiles) ----------
     def tt_state(self):
         settings = load_settings()

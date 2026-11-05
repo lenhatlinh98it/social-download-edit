@@ -36,6 +36,7 @@ function renderResearch() {
     : "No key yet — Research needs one.";
   $("#rsKeyCancel").hidden = !st.hasKey;
   ["#rsNichesBtn", "#rsFind", "#rsCheckBtn"].forEach((s) => ($(s).disabled = rs.running || !st.hasKey));
+  $("#rsLogin").disabled = rs.running;
   $("#rsCancel").hidden = !rs.running;
   $("#rsProgress").classList.toggle("on", rs.running);
 
@@ -143,6 +144,11 @@ $("#rsCheckBtn").addEventListener("click", async () => {
   renderResearch();
 });
 $("#rsCheckUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#rsCheckBtn").click(); });
+$("#rsLogin").addEventListener("click", async () => {
+  const res = await api.research_login();
+  if (!res.ok) { toast("error", "Cannot open Chrome", res.error); return; }
+  toast("info", "Research profile opened", "Sign in to TikTok with a spare account, then close Chrome before running Research.");
+});
 $("#rsQuota").addEventListener("click", () => {
   $("#rsKeyBox").hidden = !$("#rsKeyBox").hidden;
   if (!$("#rsKeyBox").hidden) $("#rsKeyInput").focus();
