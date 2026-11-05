@@ -633,20 +633,20 @@ select:focus, textarea:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 
 @keyframes toastOut { to { opacity: 0; transform: translateX(30px); } }
 
 @media (max-width: 1720px) {
-  .brand { flex: none; }
+  .brand { flex: none; min-width: 0; }  /* only the logo shows: no 210 px box */
   .brand > div:last-child { display: none; }
   .tab-badge { display: none; }
-  .sys { min-width: 0; }
-  .sys-text, #engineText { display: none; }
+  .sys { min-width: 0; flex: none; }  /* never narrower than its buttons */
+  .sys-text, #engineText, #syncBtn span { display: none; }
   .engine-btn { margin-right: 0; }
 }
 @media (max-width: 1279px) {
-  .brand { flex: none; }
+  .brand { flex: none; min-width: 0; }  /* only the logo shows: no 210 px box */
   .brand > div:last-child { display: none; }
   .tab { padding: 0 10px; gap: 6px; }
   .tab-badge { display: none; }
-  .sys { min-width: 0; }
-  .sys-text, #engineText { display: none; }
+  .sys { min-width: 0; flex: none; }  /* never narrower than its buttons */
+  .sys-text, #engineText, #syncBtn span { display: none; }
   .engine-btn { margin-right: 0; }
   .ed-body { grid-template-columns: minmax(0, 1fr) 260px; }
   #markBtn .btn-label { display: none; }
