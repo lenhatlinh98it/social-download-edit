@@ -99,6 +99,7 @@ function setView(view) {
   if (view === "logs") loadLogs();
   if (view === "research") window.loadResearch?.();
   if (view === "keys") window.loadKeys?.();
+  if (view === "accounts") window.loadAccounts?.();
 }
 
 function movePill() {

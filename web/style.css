@@ -213,6 +213,37 @@ input:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 0 0 4px rgba(139,
 .field.grow { flex: 1; }
 .field label { font-size: 11.5px; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
 .saved-form .btn { height: 44px; }
+/* accounts */
+.acc-bar .rs-input.grow { min-width: 180px; }
+.acc-sheets { flex-wrap: wrap; }
+.acc-sheets input { width: 90px; height: 30px; padding: 0 8px; font-size: 12.5px; border-radius: 8px; }
+.acc-pw { align-items: center; white-space: nowrap; }
+.acc-wrap { flex: 1; min-height: 0; overflow: auto; border-radius: var(--r-lg); padding: 0; }
+.acc-table { border-collapse: separate; border-spacing: 0; min-width: 100%; font-size: 12.5px; }
+.acc-table th, .acc-table td { border-bottom: 1px solid var(--stroke); border-right: 1px solid var(--stroke); vertical-align: top; }
+.acc-table thead th { position: sticky; top: 0; z-index: 2; background: #17172e; padding: 0; text-align: left; }
+.acc-table .acc-idx { width: 46px; min-width: 46px; text-align: center; color: var(--muted); position: sticky; left: 0; background: #14142a; z-index: 1; }
+.acc-table thead .acc-idx { z-index: 3; }
+.acc-head { display: flex; align-items: center; gap: 2px; padding: 4px 4px 4px 2px; min-width: 150px; }
+.acc-head input { height: 28px; padding: 0 8px; font-weight: 700; font-size: 12.5px; background: transparent; border-color: transparent; }
+.acc-head input:hover, .acc-head input:focus { border-color: var(--stroke); }
+.acc-x { flex: none; width: 24px; height: 24px; border-radius: 7px; color: var(--muted); display: grid; place-items: center; opacity: .55; }
+.acc-x:hover { opacity: 1; color: var(--err); background: rgba(251,113,133,.12); }
+.acc-x.confirm { opacity: 1; width: auto; padding: 0 6px; color: #fff; background: var(--err); font-size: 11px; font-weight: 700; }
+.acc-x svg { width: 13px; height: 13px; }
+.acc-idx .acc-x { margin: 4px auto 0; }
+.acc-idx b { display: block; padding-top: 7px; font-weight: 600; }
+.acc-cell { position: relative; min-height: 34px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; cursor: text; max-width: 420px; }
+.acc-cell:hover { background: var(--glass-hover); }
+.acc-cell a { color: var(--cyan); text-decoration: underline; cursor: pointer; }
+.acc-cell .masked { letter-spacing: 2px; color: var(--muted); }
+.acc-cell .acc-copy { position: absolute; top: 5px; right: 5px; display: none; height: 22px; padding: 0 7px; border-radius: 6px; font-size: 11px;
+  background: rgba(0,0,0,.55); color: #fff; }
+.acc-cell:hover .acc-copy { display: block; }
+.acc-cell textarea { width: 100%; min-width: 140px; min-height: 34px; margin: -4px -6px; padding: 4px 6px; resize: vertical; font: inherit; }
+.acc-table tr.hidden { display: none; }
+.acc-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 11.5px; padding: 0 6px; }
+.acc-sheet-actions { display: flex; gap: 8px; }
 .saved-head { display: flex; align-items: baseline; gap: 12px; padding: 4px 6px 0; }
 .saved-head h2 { margin: 0; font-size: 16px; letter-spacing: -.01em; }
 .saved-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 2px 4px 20px; }
@@ -632,7 +663,7 @@ select:focus, textarea:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 
 @keyframes toastIn { from { opacity: 0; transform: translateX(30px) scale(.97); } to { opacity: 1; transform: none; } }
 @keyframes toastOut { to { opacity: 0; transform: translateX(30px); } }
 
-@media (max-width: 1720px) {
+@media (max-width: 1980px) {
   .brand { flex: none; min-width: 0; }  /* only the logo shows: no 210 px box */
   .brand > div:last-child { display: none; }
   .tab-badge { display: none; }
@@ -640,7 +671,7 @@ select:focus, textarea:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 
   .sys-text, #engineText, #syncBtn span { display: none; }
   .engine-btn { margin-right: 0; }
 }
-@media (max-width: 1279px) {
+@media (max-width: 1319px) {
   .brand { flex: none; min-width: 0; }  /* only the logo shows: no 210 px box */
   .brand > div:last-child { display: none; }
   .tab { padding: 0 10px; gap: 6px; }
@@ -654,13 +685,13 @@ select:focus, textarea:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 
   .folder { max-width: 230px; }
 }
 
-@media (max-width: 1460px) {
+@media (max-width: 1610px) {
   .tab svg { display: none; }
 }
 @media (max-width: 1180px) {
   .tab { padding: 0 7px; font-size: 12.5px; }
 }
-@media (max-width: 1000px) {
+@media (max-width: 1040px) {
   .brand-sub, .sys { display: none; }
   .brand { min-width: 0; }
   .tab svg { display: none; }

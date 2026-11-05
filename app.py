@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -57,6 +58,8 @@ PRESETS_FILE = os.path.join(facebook.DATA_DIR, "edit_presets.json")
 TT_POSTS_FILE = os.path.join(facebook.DATA_DIR, "tiktok_posts.json")
 LOG_FILE = os.path.join(facebook.DATA_DIR, "logs.jsonl")
 LICENSE_FILE = os.path.join(facebook.DATA_DIR, "license.key")
+ACCOUNTS_FILE = os.path.join(facebook.DATA_DIR, "accounts.json")  # owner edition: plain JSON, by the user's choice
+ACCOUNT_COLUMNS = ["hotmail", "passmail", "mailtiktok", "passtiktok", "KEY", "Nguồn"]
 OWNER = edition.EDITION == "owner"
 LOG_MAX_BYTES = 2_000_000
 LOG_EVENTS = {"list", "done", "editDone", "batchDone", "queueDone", "stripDone", "mergeDone", "fbExpired",
@@ -422,6 +425,42 @@ class Api:
             self.reveal_file(LOG_FILE)
 
     # ---------- state ----------
+    # ---------- accounts (owner edition): one sheet per country, free columns, like the Google Sheet ----------
+    def accounts_load(self):
+        if not OWNER:
+            return {"ok": False, "error": "Not available in this edition."}
+        doc = _read_json(ACCOUNTS_FILE, None)
+        if not doc:
+            doc = {"sheets": [{"name": n, "columns": list(ACCOUNT_COLUMNS), "rows": []} for n in ("JP", "US", "KR")]}
+        return {"ok": True, "doc": doc, "path": ACCOUNTS_FILE}
+
+    def accounts_save(self, doc):
+        """Replace the whole document (it is small). Written to a temp file first and the previous version kept as
+        accounts.json.bak, so a crash mid-write never loses the list."""
+        if not OWNER:
+            return {"ok": False, "error": "Not available in this edition."}
+        sheets = []
+        for sh in (doc or {}).get("sheets") or []:
+            columns = [str(c) for c in sh.get("columns") or []]
+            rows = [[str(v) if v is not None else "" for v in (r or [])][:len(columns)] for r in sh.get("rows") or []]
+            rows = [r + [""] * (len(columns) - len(r)) for r in rows]
+            name = str(sh.get("name") or "").strip() or f"Sheet {len(sheets) + 1}"
+            sheets.append({"name": name[:40], "columns": columns, "rows": rows})
+        tmp = ACCOUNTS_FILE + ".tmp"
+        try:
+            _write_json(tmp, {"sheets": sheets})
+            if os.path.isfile(ACCOUNTS_FILE):
+                shutil.copyfile(ACCOUNTS_FILE, ACCOUNTS_FILE + ".bak")
+            os.replace(tmp, ACCOUNTS_FILE)
+        except OSError as ex:
+            return {"ok": False, "error": f"Could not save: {ex}"}
+        return {"ok": True}
+
+    def accounts_open_link(self, url):
+        """Links in the cells (sources): only web links are opened."""
+        if re.match(r"^https?://[^\s]+$", (url or "").strip(), re.I):
+            webbrowser.open(url.strip())
+
     # ---------- license ----------
     def license_info(self):
         lic = self._license

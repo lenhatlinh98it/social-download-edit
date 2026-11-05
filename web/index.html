@@ -63,6 +63,10 @@
           <svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8M15 8h5v5"/></svg>
           Research
         </button>
+        <button class="tab owner-only" data-view="accounts">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.8c1.9.7 3.1 2.4 3.5 5.2"/></svg>
+          Accounts
+        </button>
         <button class="tab owner-only" data-view="keys">
           <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></svg>
           Keys
@@ -180,6 +184,28 @@
           <div class="saved-head"><h2>Hot niches</h2><span class="muted" id="rsNicheMore"></span></div>
           <div class="rs-niches" id="rsNiches"></div>
           <div id="rsResults"></div>
+        </div>
+      </section>
+
+      <section class="view owner-only" id="view-accounts">
+        <div class="rs-bar glass acc-bar">
+          <div class="seg acc-sheets" id="accSheets"></div>
+          <button class="btn ghost sm" id="accAddSheet" type="button" title="Add a sheet (a country)">+ Sheet</button>
+          <div class="rs-input grow"><input id="accSearch" placeholder="Search this sheet…" spellcheck="false"></div>
+          <button class="btn ghost sm" id="accAddRow" type="button">+ Row</button>
+          <button class="btn ghost sm" id="accAddCol" type="button">+ Column</button>
+          <label class="ed-check acc-pw"><input type="checkbox" id="accShowPw"> Show passwords</label>
+          <span class="chip mono" id="accCount">0 accounts</span>
+        </div>
+        <div class="acc-wrap glass" id="accWrap">
+          <table class="acc-table" id="accTable"></table>
+        </div>
+        <div class="acc-foot muted">
+          <span>Click a cell to edit · Enter saves · Alt+Enter new line · Tab next cell · paste a block copied from Google Sheets to fill many cells</span>
+          <span class="acc-sheet-actions">
+            <button class="btn ghost sm" id="accRenameSheet" type="button">Rename sheet</button>
+            <button class="btn ghost sm" id="accDeleteSheet" type="button">Delete sheet</button>
+          </span>
         </div>
       </section>
 
@@ -839,6 +865,7 @@
   <script src="batch.js"></script>
   <script src="research.js"></script>
   <script src="keys.js"></script>
+  <script src="accounts.js"></script>
   <script src="smartcut.js"></script>
   <script src="sync.js"></script>
 </body>
