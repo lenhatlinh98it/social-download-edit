@@ -35,6 +35,10 @@ try:  # owner edition only (local AI: faster-whisper, OpenCV, Ollama)
     import smartcut
 except ImportError:
     smartcut = None
+try:  # owner edition only (needs the cryptography package)
+    import sync
+except ImportError:
+    sync = None
 
 engine.activate()  # must run before yt_dlp is imported
 import yt_dlp  # noqa: E402
@@ -1193,6 +1197,103 @@ class Api:
         host = re.sub(r"^https?://", "", (url or "").lower()).split("/")[0]
         if host.endswith(("youtube.com", "tiktok.com")) or host == "console.cloud.google.com":
             webbrowser.open(url)
+
+    def research_login(self):
+        """Open the Research Chrome profile on the TikTok login page so the user can sign in there themselves."""
+        if not research:
+            return {"ok": False, "error": "Not available in this edition."}
+        root = load_settings().get("ttChromeRoot")
+        if not root:
+            return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first."}
+        try:
+            tiktok._open_window(root, research.RESEARCH_PROFILE, "https://www.tiktok.com/login")
+        except (tiktok.PostError, OSError) as ex:
+            return {"ok": False, "error": str(ex)}
+        return {"ok": True}
+
+    # ---------- Sync between PCs (owner edition, private GitHub repo, encrypted) ----------
+    def _sync(self):
+        if not (OWNER and sync):
+            raise RuntimeError("Not available in this edition.")
+        settings = load_settings()
+        if not (settings.get("syncRepo") and settings.get("syncToken") and settings.get("syncPass")):
+            raise RuntimeError("Set up Sync first.")
+        return settings, sync.GitHub(settings["syncRepo"], settings["syncToken"])
+
+    def sync_state(self):
+        settings = load_settings()
+        token = settings.get("syncToken") or ""
+        return {"available": bool(OWNER and sync), "repo": settings.get("syncRepo") or "",
+                "token": f"{token[:4]}…{token[-4:]}" if token else "", "hasPass": bool(settings.get("syncPass")),
+                "lastSync": settings.get("syncAt") or ""}
+
+    def sync_setup(self, repo, token, passphrase):
+        """Check the repo and token, and that the passphrase opens what is already in the repo, then save them."""
+        if not (OWNER and sync):
+            return {"ok": False, "error": "Not available in this edition."}
+        settings = load_settings()
+        token = (token or "").strip() or settings.get("syncToken") or ""
+        passphrase = passphrase or settings.get("syncPass") or ""
+        if len(passphrase) < 8:
+            return {"ok": False, "error": "Use a passphrase of at least 8 characters."}
+        try:
+            gh = sync.GitHub(repo, token)
+            gh.check()
+            _sha, blob = gh.download()
+            if blob:
+                sync.unpack(blob, passphrase)
+        except sync.SyncError as ex:
+            return {"ok": False, "error": str(ex)}
+        if gh.repo != settings.get("syncRepo"):
+            for k in ("syncSha", "syncDigest", "syncAt"):
+                settings.pop(k, None)
+        settings.update(syncRepo=gh.repo, syncToken=token, syncPass=passphrase)
+        _write_json(SETTINGS_FILE, settings)
+        self._log("success", "sync", f"Sync set up with {gh.repo}")
+        return {"ok": True}
+
+    def _sync_done(self, settings, sha, files, when):
+        settings.update(syncSha=sha, syncDigest=sync.digest(files), syncAt=when)
+        _write_json(SETTINGS_FILE, settings)
+
+    def sync_upload(self, force=False):
+        try:
+            settings, gh = self._sync()
+            files = sync.read_local(facebook.DATA_DIR)
+            sha, blob = gh.download()
+            if sha and sha != settings.get("syncSha") and not force:
+                return {"ok": False, "conflict": "remote", "meta": sync.unpack(blob, settings["syncPass"])["meta"]}
+            new_blob, meta = sync.pack(files, settings["syncPass"])
+            new_sha = gh.upload(new_blob, sha, f"Sync from {meta['host']}")
+        except (RuntimeError, sync.SyncError) as ex:
+            return {"ok": False, "error": str(ex)}
+        self._sync_done(settings, new_sha, files, meta["time"])
+        self._log("success", "sync", f"Uploaded {len(files)} data files to {gh.repo}")
+        return {"ok": True, "files": len(files)}
+
+    def sync_fetch(self, force=False):
+        if self._busy or self._research_running:
+            return {"ok": False, "error": "Wait until the current download or research run finishes."}
+        try:
+            settings, gh = self._sync()
+            sha, blob = gh.download()
+            if not sha:
+                return {"ok": False, "error": "Nothing uploaded yet. Press Upload on the other PC first."}
+            local = sync.read_local(facebook.DATA_DIR)
+            changed = sync.digest(local) != settings.get("syncDigest")
+            if sha == settings.get("syncSha") and not changed:
+                return {"ok": True, "upToDate": True}
+            data = sync.unpack(blob, settings["syncPass"])
+            if changed and local and not force:
+                return {"ok": False, "conflict": "local", "meta": data["meta"]}
+            sync.write_local(facebook.DATA_DIR, data["files"])
+        except (RuntimeError, sync.SyncError) as ex:
+            return {"ok": False, "error": str(ex)}
+        except OSError as ex:
+            return {"ok": False, "error": f"Could not write the data files: {ex}"}
+        self._sync_done(settings, sha, sync.read_local(facebook.DATA_DIR), data["meta"]["time"])
+        self._log("success", "sync", f"Fetched data uploaded by {data['meta']['host']} at {data['meta']['time']}")
+        return {"ok": True, "meta": data["meta"]}
 
     # ---------- TikTok posting (Chrome Portable profiles) ----------
     def tt_state(self):

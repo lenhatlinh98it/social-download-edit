@@ -86,6 +86,10 @@
           <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>
           <span class="mono" id="engineText">yt-dlp</span>
         </button>
+        <button class="engine-btn owner-only" id="syncBtn" title="Sync data with your other PC">
+          <svg viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 8.5a4.3 4.3 0 0 1-.5 9.5M12 12v8M9 17l3 3 3-3"/></svg>
+          <span class="mono">Sync</span>
+        </button>
         <span class="sys-dot" id="sysDot"></span>
         <span class="sys-text mono" id="sysText">READY</span>
       </div>
@@ -163,6 +167,7 @@
         <div class="rs-bar glass">
           <div class="rs-input grow"><input id="rsCheckUrl" placeholder="Check one YouTube channel on TikTok — paste https://www.youtube.com/@channel" spellcheck="false"></div>
           <button class="btn ghost sm" id="rsCheckBtn">Check on TikTok</button>
+          <button class="btn ghost sm" id="rsLogin" title="Open the Chrome profile Research uses, on the TikTok login page. Sign in with a spare account, then close Chrome.">Log in to TikTok</button>
         </div>
         <form class="rs-key glass" id="rsKeyBox" hidden autocomplete="off">
           <div class="rs-key-text">
@@ -764,6 +769,37 @@
     </form>
   </div>
 
+  <div class="modal owner-only" id="syncModal" hidden>
+    <form class="modal-card glass" id="syncForm" autocomplete="off">
+      <h3>Sync between PCs</h3>
+      <p class="muted sync-text">Saved, downloaded, accounts, TikTok posts, research and edit presets are encrypted with your passphrase,
+        then kept in a <b>private</b> GitHub repo. Upload on one PC, Fetch on the other. Logins, cookies and settings stay on each PC.</p>
+      <div class="sync-status mono" id="syncStatus"></div>
+      <details class="sync-setup" id="syncSetup">
+        <summary>Repo, token and passphrase</summary>
+        <div class="field grow">
+          <label for="syncRepo">Private repo</label>
+          <input id="syncRepo" placeholder="owner/name, e.g. myname/grabber-data" spellcheck="false">
+        </div>
+        <div class="field grow">
+          <label for="syncToken">GitHub token</label>
+          <input id="syncToken" type="password" spellcheck="false" placeholder="Fine-grained token: only this repo, Contents read and write">
+        </div>
+        <div class="field grow">
+          <label for="syncPass">Passphrase</label>
+          <input id="syncPass" type="password" spellcheck="false" placeholder="Same on both PCs, at least 8 characters">
+        </div>
+        <button type="button" class="btn ghost sm" id="syncSave">Save</button>
+      </details>
+      <div class="sync-msg" id="syncMsg"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="syncClose">Close</button>
+        <button type="button" class="btn ghost" id="syncUpload">Upload</button>
+        <button type="button" class="btn primary" id="syncFetch">Fetch</button>
+      </div>
+    </form>
+  </div>
+
   <div class="modal" id="ttModal" hidden>
     <form class="modal-card glass" id="ttForm" autocomplete="off">
       <h3>Post to TikTok</h3>
@@ -831,5 +867,6 @@
   <script src="keys.js"></script>
   <script src="accounts.js"></script>
   <script src="smartcut.js"></script>
+  <script src="sync.js"></script>
 </body>
 </html>
