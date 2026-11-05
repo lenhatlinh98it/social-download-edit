@@ -63,7 +63,7 @@ Owner edition. In **Editor → Smart cut**, choose a video file or paste a **You
 3. **Reframe to 9:16** — *Follow faces* (YuNet face detection with a steady, smoothed crop that jumps at scene cuts; centre crop when nobody is on screen), *Centre*, or *Fit + blur* (the whole frame on a blurred background, for slides and screen recordings). Black bars in the source are removed first.
 4. **Captions** — burned-in, a few words at a time, each word lighting up as it is spoken; bottom, middle or top.
 
-Whisper uses an NVIDIA GPU when CUDA 12 / cuDNN 9 are available (for example `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` into `.venv`) and falls back to the CPU otherwise. Models are downloaded on first use into the user data folder.
+Whisper uses an NVIDIA GPU when the CUDA 12 / cuDNN 9 libraries can be loaded — `setup.bat` installs them (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) on machines with an NVIDIA GPU — and falls back to the CPU otherwise; the Smart cut panel says which one is used and what is missing. Models are downloaded on first use into the user data folder.
 
 ## Post to TikTok
 
@@ -118,13 +118,14 @@ The **Logs** tab records fetches, downloads, exports, Smart cut runs, Research a
 2. Double-click **`setup.bat`**. It will:
    - install Python 3.12 via winget if Python 3.10–3.13 is missing
    - create `.venv` and install `requirements.txt` (includes faster-whisper and OpenCV for Smart cut)
+   - on a machine with an NVIDIA GPU, install the CUDA libraries Smart cut needs to transcribe on the GPU (~1 GB)
    - install Chromium for Facebook / Douyin / Instagram
    - download a portable ffmpeg (LGPL) into `bin\`
    - install the Microsoft Edge WebView2 runtime if needed
    - create a **Grabber** shortcut on the Desktop
 3. Open **Grabber** from the Desktop (or run `run.bat`).
 
-Re-run `setup.bat` anytime to repair or update. Optional, for Smart cut: [Ollama](https://ollama.com) with `ollama pull qwen2.5:7b`, and the NVIDIA CUDA packages above for a GPU.
+Re-run `setup.bat` anytime to repair or update. Optional, for Smart cut: [Ollama](https://ollama.com) with `ollama pull qwen2.5:7b`.
 
 ## User data
 

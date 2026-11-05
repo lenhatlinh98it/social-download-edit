@@ -1,6 +1,6 @@
 # Grabber setup - run via setup.bat (double-click). Safe to run again: it repairs / updates.
 #  1. Python 3.10-3.13 (installs Python 3.12 for the current user via winget if missing)
-#  2. .venv + pinned packages from requirements.txt
+#  2. .venv + pinned packages from requirements.txt (+ CUDA libraries for Smart cut on NVIDIA machines)
 #  3. Chromium for Playwright (Facebook / Douyin)
 #  4. Portable ffmpeg (LGPL build) into .\bin
 #  5. Microsoft Edge WebView2 runtime (UI), if missing
@@ -69,6 +69,15 @@ try {
     Run $venvPy @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '--upgrade', 'pip')
     Run $venvPy @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '-r', 'requirements.txt')
     Ok 'Packages installed'
+
+    # Smart cut's Whisper (CTranslate2 4.x) runs on an NVIDIA GPU with cuBLAS 12 + cuDNN 9; without them it
+    # falls back to the CPU. The driver alone is not enough. ~1 GB, so only on machines with an NVIDIA GPU.
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+        Step 'NVIDIA GPU found: installing the CUDA libraries for Smart cut (first time ~1 GB)'
+        Run $venvPy @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet',
+                      'nvidia-cublas-cu12', 'nvidia-cudnn-cu12==9.*')
+        Ok 'CUDA libraries installed'
+    }
 
     # ---------- 3. Chromium for Playwright ----------
     Step 'Installing Chromium for Facebook / Douyin (first time ~150 MB)'

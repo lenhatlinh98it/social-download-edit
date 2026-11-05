@@ -78,7 +78,9 @@ async function scLoadState() {
     sc.ready = true;
   }
   const model = $("#scLlmModel").value.trim();
-  const gpu = res.cuda ? `<span class="ok">NVIDIA GPU found</span> — Whisper runs on the GPU.` : "No NVIDIA GPU — Whisper runs on the CPU (slower).";
+  const gpu = !res.cuda ? "No NVIDIA GPU — Whisper runs on the CPU (slower)."
+    : res.cudaMissing?.length ? `<span class="bad">NVIDIA GPU found, but ${esc(res.cudaMissing.join(", "))} is missing</span> — Whisper runs on the CPU. Run setup.bat again to install the CUDA libraries.`
+      : `<span class="ok">NVIDIA GPU found</span> — Whisper runs on the GPU.`;
   let llm;
   if (res.ollama === null) llm = `<span class="bad">Ollama is not running</span> — install it from ollama.com, or moments are picked with heuristics.`;
   else if (!res.ollama.some((m) => m === model || m.split(":")[0] === model)) llm = `<span class="bad">Ollama has no “${esc(model)}”</span> — run <span class="mono">ollama pull ${esc(model)}</span>.`;

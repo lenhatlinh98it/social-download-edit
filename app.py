@@ -1524,8 +1524,9 @@ class Api:
         if not smartcut:
             return {"ok": False, "error": "Not available in this edition."}
         opts = {**smartcut.defaults(), **(load_settings().get("smartCut") or {})}
+        cuda = smartcut.cuda_devices()
         return {"ok": True, "opts": opts, "whisperModels": list(smartcut.WHISPER_MODELS),
-                "ollama": smartcut.ollama_models(), "cuda": smartcut.cuda_devices()}
+                "ollama": smartcut.ollama_models(), "cuda": cuda, "cudaMissing": smartcut.cuda_missing() if cuda else []}
 
     def smartcut_start(self, path, opts):
         """`path`: a video file, or a YouTube / Douyin link that is downloaded first."""
