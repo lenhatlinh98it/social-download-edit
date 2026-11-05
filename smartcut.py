@@ -61,6 +61,23 @@ def cuda_devices():
         return 0
 
 
+CUDA_LIBS = ("cublas64_12.dll", "cudnn64_9.dll")  # what CTranslate2 4.x loads for Whisper on the GPU
+
+
+def cuda_missing():
+    """CUDA libraries Whisper needs that cannot be loaded ([] = the GPU is usable). The driver alone makes
+    cuda_devices() > 0, but without these Whisper fails on the GPU."""
+    import ctypes
+    _add_cuda_dlls()
+    missing = []
+    for name in CUDA_LIBS:
+        try:
+            ctypes.WinDLL(name)
+        except OSError:
+            missing.append(name)
+    return missing
+
+
 def ollama_models(timeout=2):
     """Names of the models installed in Ollama, or None when Ollama is not running."""
     try:
@@ -84,17 +101,33 @@ def extract_audio(ffmpeg, src, dst):
         raise RuntimeError("Cannot read the audio: " + r.stderr.strip()[-200:])
 
 
+def read_wav(wav):
+    """The 16 kHz mono wav from extract_audio() as float32 samples in -1..1."""
+    import numpy as np
+    with wave.open(wav, "rb") as w:
+        return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+
+
 def transcribe(wav, model_name, models_dir, language, on_progress, should_cancel, log):
     """Segments [{start, end, text, words: [{start, end, word}]}] and the detected language."""
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     from faster_whisper import WhisperModel
-    _add_cuda_dlls()
-    attempts = [("cuda", "float16"), ("cpu", "int8")] if cuda_devices() else [("cpu", "int8")]
+    attempts = [("cpu", "int8")]
+    if cuda_devices():
+        missing = cuda_missing()
+        if missing:
+            log(f"NVIDIA GPU found but {', '.join(missing)} cannot be loaded - Whisper runs on the CPU. "
+                "Run setup.bat again to install the CUDA libraries.")
+        else:
+            attempts.insert(0, ("cuda", "float16"))
+    # samples, not the file path: faster-whisper would decode the file with PyAV, whose API changes between
+    # versions (av.open(metadata_errors=...) fails on some) - the wav is already 16 kHz mono
+    audio = read_wav(wav)
     for i, (device, compute) in enumerate(attempts):
         try:
             model = WhisperModel(model_name, device=device, compute_type=compute,
                                  download_root=os.path.join(models_dir, "whisper"))
-            segments, info = model.transcribe(wav, language=language or None, vad_filter=True, word_timestamps=True,
+            segments, info = model.transcribe(audio, language=language or None, vad_filter=True, word_timestamps=True,
                                               beam_size=5 if device == "cuda" else 1)
             out = []
             for s in segments:
@@ -120,9 +153,8 @@ def transcribe(wav, model_name, models_dir, language, on_progress, should_cancel
 def loudness(wav):
     """Loudness (dB) for each second of the 16 kHz mono wav."""
     import numpy as np
-    with wave.open(wav, "rb") as w:
-        rate = w.getframerate()
-        data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+    rate = 16000  # extract_audio()
+    data = read_wav(wav)
     n = len(data) // rate
     if n == 0:
         return []
