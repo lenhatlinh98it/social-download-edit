@@ -403,6 +403,14 @@ input:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 0 0 4px rgba(139,
 .ttm-spread select { width: auto; }
 .ttm-spread .ttm-slots { width: 170px; height: 36px; padding: 0 10px; border-radius: 10px; font-size: 12.5px; }
 .ttm-plan { flex-basis: 100%; font-size: 11.5px; }
+.sync-text { margin: 0; font-size: 12.5px; line-height: 1.5; }
+.sync-status { font-size: 12px; }
+.sync-setup > * + * { margin-top: 10px; }
+.sync-setup summary { cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.sync-msg { font-size: 12.5px; line-height: 1.5; }
+.sync-msg:empty { display: none; }
+.sync-msg.err { color: var(--err); }
+.sync-msg.warn { color: #fbbf24; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .hist-actions .icon-btn { width: 36px; height: 36px; border-radius: 11px; }
 .hist-empty { margin: auto; text-align: center; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 6px; }
