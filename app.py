@@ -1679,11 +1679,8 @@ class Api:
             return {"ok": False, "error": "Choose a video first."}
         opts = {**smartcut.defaults(), **(opts or {})}
         opts["count"] = min(max(int(opts["count"]), 1), 20)
-        opts["minLen"], opts["maxLen"] = sorted((min(max(float(opts["minLen"]), 5), 180), min(max(float(opts["maxLen"]), 5), 180)))
         opts["style"] = "moments" if opts["style"] == "moments" else "series"
         opts["target"] = min(max(float(opts["target"]), 20), 180)
-        if opts["style"] == "moments" and opts["maxLen"] - opts["minLen"] < 5:
-            return {"ok": False, "error": "Leave at least 5 seconds between the shortest and the longest clip."}
         if opts["whisper"] not in smartcut.WHISPER_MODELS:
             opts["whisper"] = "small"
         if opts["reframe"] not in ("face", "center", "fit"):
@@ -1774,21 +1771,16 @@ class Api:
             info = editor.probe(ffprobe, path)
             data = smartcut.analyze(ffmpeg, path, info, opts, facebook.DATA_DIR, progress, cancel, log)
             progress("Choosing the best moments…", 0.6)
+            moments, method = smartcut.series(data, info, opts, cancel, log)
+            if not moments:
+                raise RuntimeError("Nothing to cut in this video.")
             if opts["style"] == "series":
-                moments, method = smartcut.series(data, info, opts, cancel, log)
-                if not moments:
-                    raise RuntimeError("Nothing to cut in this video.")
                 log(f"Series of {len(moments)} part(s), " + ("blocks chosen with the LLM" if method == "llm" else "heuristics")
                     + ": " + "; ".join(f"Part {m['part']}: {round(m['length'])} s, {smartcut._fmt(m['start'])}-"
                                        f"{smartcut._fmt(m['end'])}" for m in moments))
             else:
-                moments, method = smartcut.pick(data, info, opts, cancel, log)
-                if not moments:
-                    raise RuntimeError("No moment fits the clip length - try a shorter minimum length.")
-                for m in moments:
-                    m["parts"] = [[m["start"], m["end"]]]
-                log(f"Picked {len(moments)} moment(s) with " + ("the LLM" if method == "llm" else "heuristics") + ": "
-                    + ", ".join(f"{smartcut._fmt(m['start'])}-{smartcut._fmt(m['end'])}" for m in moments))
+                log(f"{len(moments)} highlight reel(s), " + ("moments chosen with the LLM" if method == "llm" else "heuristics")
+                    + ": " + "; ".join(f"{round(m['length'])} s, {m['reason']}" for m in moments))
             self._emit("scPlan", method=method, moments=moments, language=data["language"])
             progress("Looking for black bars…", 0.61)
             bars = smartcut.detect_bars(path, info["duration"])
