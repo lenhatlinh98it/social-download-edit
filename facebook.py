@@ -48,6 +48,9 @@ def normalize_reels_url(url: str) -> str:
         return url
     if not url.startswith("http"):
         url = "https://" + url
+    m = re.search(r"profile\.php\?(?:.*&)?id=(\d+)", url)
+    if m:  # profile.php?id=… keeps its query: the reels tab is &sk=reels_tab
+        return f"https://www.facebook.com/profile.php?id={m.group(1)}&sk=reels_tab"
     url = re.sub(r"/(videos|photos|about|posts|mentions|followers|reels)$", "", url)
     return url + "/reels/"
 
@@ -149,14 +152,20 @@ def _session_expired(page):
 
 
 def _page_name(page, url):
-    """Display name of the page, e.g. "Gentle Days Studio"; falls back to the URL slug."""
+    """Display name of the page, e.g. "Gentle Days Studio"; "" when the title has none (a personal profile's
+    title is just "| Facebook")."""
     name = page.evaluate("() => document.querySelector('meta[property=\"og:title\"]')?.content || document.title || ''")
-    name = re.sub(r"^\(\d+\+?\)\s*", "", name or "").split(" | ")[0].strip()
+    name = re.split(r"\s*\|\s*", re.sub(r"^\(\d+\+?\)\s*", "", name or ""))[0].strip()
     name = re.sub(r"\s*[-–·]?\s*(Reels|Thước phim)$", "", name, flags=re.IGNORECASE).strip()
-    if name and name.lower() != "facebook":
-        return name
-    slug = re.sub(r"^https?://[^/]+/", "", url).split("/")[0]
-    return slug or "facebook"
+    return name if name.lower() != "facebook" else ""
+
+
+def page_slug(url):
+    """Short name from the link: the page slug, or the id of a profile.php link."""
+    m = re.search(r"profile\.php\?(?:.*&)?id=(\d+)", url)
+    if m:
+        return m.group(1)
+    return re.sub(r"^https?://[^/]+/", "", url).split("/")[0] or "facebook"
 
 
 def fetch_reels(url, on_progress=None, max_idle_rounds=4):
