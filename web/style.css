@@ -708,7 +708,7 @@ select:focus, textarea:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 
 .sc-ai .ok { color: var(--ok, #34d399); }
 .sc-ai .bad { color: var(--err); }
 .sc-row .fmeta { white-space: normal; }
-#scSubPos.off, #scTarget.off, #scLen.off { display: none; }
+#scSubPos.off { display: none; }
 .sc-only label[hidden] { display: none; }
 #scDone .ed-actions { flex-wrap: wrap; }
 #scDone .btn.sm { flex: 1 1 100%; }

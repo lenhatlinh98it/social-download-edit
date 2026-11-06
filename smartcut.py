@@ -37,7 +37,7 @@ class Cancelled(Exception):
 
 
 def defaults():
-    return {"style": "series", "target": 90, "count": 2, "partLabel": True, "minLen": 20, "maxLen": 60, "reframe": "face", "subtitles": True, "subPos": "bottom", "whisper": "small",
+    return {"style": "series", "target": 90, "count": 2, "partLabel": True, "reframe": "face", "subtitles": True, "subPos": "bottom", "whisper": "small",
             "language": "", "useLlm": True, "llmModel": DEFAULT_LLM}
 
 
@@ -165,81 +165,6 @@ def scene_scan(ffmpeg, src, should_cancel):
 
 
 # ---------- 3. choosing the moments ----------
-def _windows(segments, min_len, max_len):
-    """Every run of whole sentences lasting min_len..max_len seconds: (first index, last index)."""
-    out = []
-    for i in range(len(segments)):
-        for j in range(i, len(segments)):
-            d = segments[j]["end"] - segments[i]["start"]
-            if d > max_len:
-                break
-            if d >= min_len:
-                out.append((i, j))
-    return out
-
-
-def _overlaps(a, b, gap=2.0):
-    return a["start"] < b["end"] + gap and b["start"] < a["end"] + gap
-
-
-def _choose(cands, count):
-    picked = []
-    for c in sorted(cands, key=lambda c: -c["score"]):
-        if all(not _overlaps(c, p) for p in picked):
-            picked.append(c)
-        if len(picked) >= count:
-            break
-    return sorted(picked, key=lambda c: c["start"])
-
-
-def heuristic_moments(segments, loud, cuts, duration, count, min_len, max_len):
-    """Score each window: how much of it is speech, how loud/lively it is, how fast people talk."""
-    import numpy as np
-    loud = np.array(loud or [0.0])
-    ref = float(np.median(loud))
-    spread = float(np.std(loud)) or 1.0
-
-    def energy(a, b):
-        part = loud[int(a):max(int(a) + 1, int(b))]
-        return float(np.mean(part) - ref) / spread if len(part) else 0.0
-
-    speech_time = sum(s["end"] - s["start"] for s in segments)
-    talky = speech_time > 0.4 * max(duration, 1)  # a talk/podcast: whole sentences matter more than visuals
-
-    def mid_sentence(t):
-        return any(s["start"] + 0.3 < t < s["end"] - 0.3 for s in segments)
-
-    def score_window(start, end, from_sentences):
-        d = end - start
-        inside = [s for s in segments if s["end"] > start and s["start"] < end]
-        speech = sum(min(s["end"], end) - max(s["start"], start) for s in inside) / d
-        changes = sum(1 for c in cuts if start < c < end) / d
-        e = max(-1.0, min(energy(start, end), 2.0))
-        if talky:
-            score = 0.45 * speech + 0.35 * e + 0.2 * min(sum(len(s["text"]) for s in inside) / d / 15, 1.0)
-        else:  # scenes: visual pace and loudness lead, speech helps
-            score = 0.35 * min(changes * 4, 1.0) + 0.35 * e + 0.3 * speech
-        if not from_sentences:  # do not start or stop in the middle of someone's sentence
-            score -= 0.15 * (mid_sentence(start) + mid_sentence(end))
-        if any("?" in s["text"] or "？" in s["text"] for s in inside[:2]):
-            score += 0.05  # a question near the start tends to make a hook
-        title = next((s["text"] for s in inside if s["start"] >= start - 0.3), "")[:80]
-        return {"start": round(start, 2), "end": round(end, 2), "score": round(score, 3), "title": title,
-                "reason": f"{round(speech * 100)}% speech, energy {e:+.1f}, {round(changes * 60)} cuts/min"}
-
-    cands = [score_window(segments[i]["start"], segments[j]["end"], True)
-             for i, j in (_windows(segments, min_len, max_len) if len(segments) >= 3 else [])]
-    # windows that start on a scene cut (or every few seconds) and end on one: for footage without much talking
-    inner = [c for c in cuts if 0 < c < duration]
-    target = (min_len + max_len) / 2
-    starts = sorted({0.0, *inner, *[k * min_len / 2 for k in range(1, int(duration // (min_len / 2)) + 1)]})
-    for start in starts:
-        end = next((c for c in inner if min_len <= c - start <= max_len), min(start + target, duration))
-        if end - start >= min(min_len, duration):
-            cands.append(score_window(start, end, False))
-    return _choose(cands, count)
-
-
 END_OF_THOUGHT = re.compile(r"[.!?。！？…」』)\"]\s*$")
 
 
@@ -313,6 +238,24 @@ def _break_score(prev, nxt, cuts):
     return s
 
 
+def _parts(units, data, duration):
+    """Kept blocks -> [[start, end], ...] to play one after another."""
+    parts = []
+    for u in units:  # blocks that follow each other play as one continuous part
+        if parts and u["a"] - parts[-1][1] < 0.05:
+            parts[-1][1] = u["b"]
+        else:
+            parts.append([u["a"], u["b"]])
+    for j, (a, b) in enumerate(parts):  # a blink-long piece ("Enjoy.") gets some room on both sides
+        if b - a < 1.5:
+            room = (1.5 - (b - a)) / 2
+            lo = max(parts[j - 1][1] if j else 0.0, max((s["end"] for s in data["segments"] if s["end"] <= a), default=0.0))
+            hi = min(parts[j + 1][0] if j + 1 < len(parts) else duration,
+                     min((s["start"] for s in data["segments"] if s["start"] >= b), default=duration))
+            parts[j] = [max(lo, a - room), min(hi, b + room)]
+    return [[round(a, 2), round(b, 2)] for a, b in parts]
+
+
 def plan_series(data, duration, count, target, llm_marks=None):
     """Part 1..N in story order: the best blocks spread over the whole video (about count x target seconds),
     then split where the story pauses. Returns [{parts, start, end, length, score, text, ...}]."""
@@ -371,20 +314,7 @@ def plan_series(data, duration, count, target, llm_marks=None):
     groups = [kept[a:b] for a, b in zip([0, *splits], [*splits, len(kept)]) if b > a]
     series = []
     for k, g in enumerate(groups):
-        parts = []
-        for u in g:  # blocks that follow each other play as one continuous part
-            if parts and u["a"] - parts[-1][1] < 0.05:
-                parts[-1][1] = u["b"]
-            else:
-                parts.append([u["a"], u["b"]])
-        for j, (a, b) in enumerate(parts):  # a blink-long piece ("Enjoy.") gets some room on both sides
-            if b - a < 1.5:
-                room = (1.5 - (b - a)) / 2
-                lo = max(parts[j - 1][1] if j else 0.0, max((s["end"] for s in data["segments"] if s["end"] <= a), default=0.0))
-                hi = min(parts[j + 1][0] if j + 1 < len(parts) else duration,
-                         min((s["start"] for s in data["segments"] if s["start"] >= b), default=duration))
-                parts[j] = [max(lo, a - room), min(hi, b + room)]
-        parts = [[round(a, 2), round(b, 2)] for a, b in parts]
+        parts = _parts(g, data, duration)
         series.append({"parts": parts, "start": parts[0][0], "end": parts[-1][1],
                        "length": round(sum(b - a for a, b in parts), 1),
                        "score": round(sum(u["score"] for u in g) / len(g), 2),
@@ -392,6 +322,70 @@ def plan_series(data, duration, count, target, llm_marks=None):
                        "part": k + 1, "of": len(groups), "title": "",
                        "reason": f"Part {k + 1}/{len(groups)}: {_fmt(parts[0][0])}–{_fmt(parts[-1][1])}, {len(parts)} cut(s)"})
     return series
+
+
+def plan_moments(data, duration, count, target, llm_marks=None):
+    """Highlight reels: each short is about `target` s of the best moments from the whole video, in time order.
+    The video is split into equal stretches and every stretch gives each short one of its best blocks, so a
+    short shows every stage of the video (arriving, making the fire, cooking, eating...) rather than only the
+    loudest or busiest one, and ends on the result. Shorts never share a block. Returns [{parts, start, end, length, score, text, ...}]."""
+    units = build_units(data, duration, piece=5.0)
+    if not units:
+        return []
+    talk = score_units(units, data, duration, llm_marks)
+    longest = max(8.0, target * 0.35)  # a long talk would eat the whole reel
+    ok = [i for i, u in enumerate(units) if u["b"] - u["a"] <= longest]
+    owner = {}  # unit index -> short
+    # footage usually ends on the result (the dish served, the clean car): a calm shot that never scores high,
+    # so every reel ends on the start of the video's last scene. Talks end on "subscribe" instead - not there.
+    finale = set()
+    if talk < 0.4:
+        last_scene = max((c for c in data["cuts"] if duration * 0.85 <= c < duration - 4), default=duration - 20)
+        ending = [i for i in ok if units[i]["a"] >= last_scene - 0.05 and units[i]["b"] - units[i]["a"] >= 2]
+        k, held = 0, 0.0
+        for i in ending:  # about 8 s of it for each reel
+            if k >= count:
+                break
+            owner[i] = k
+            finale.add(i)
+            held += units[i]["b"] - units[i]["a"]
+            if held >= 7:
+                k, held = k + 1, 0.0
+    stretches = max(3, round(target / 7))  # about one 5-8 s moment per stretch
+    for j in range(stretches):
+        lo, hi = duration * j / stretches, duration * (j + 1) / stretches
+        ranked = sorted((i for i in ok if lo <= units[i]["a"] < hi and i not in finale), key=lambda i: -units[i]["score"])
+        for r, i in enumerate(ranked[:count]):
+            owner[i] = (r + j) % count  # rotate who gets the best one, so every short is as good as the others
+    reels = []
+    for k in range(count):
+        keep = {i for i, o in owner.items() if o == k}
+        total = sum(units[i]["b"] - units[i]["a"] for i in keep)
+        while total < target - 3:  # grow the strongest moments into the blocks next to them
+            free = [i for i in ok if i not in owner and (i - 1 in keep or i + 1 in keep)]
+            if not free:
+                free = [i for i in ok if i not in owner]
+            if not free:
+                break
+            i = max(free, key=lambda i: units[i]["score"])
+            keep.add(i)
+            owner[i] = k
+            total += units[i]["b"] - units[i]["a"]
+        while total > target + 4 and len(keep - finale) > 1:
+            weakest = min(keep - finale, key=lambda i: units[i]["score"])
+            keep.discard(weakest)
+            del owner[weakest]
+            total -= units[weakest]["b"] - units[weakest]["a"]
+        if not keep:
+            continue
+        g = [units[i] for i in sorted(keep)]
+        parts = _parts(g, data, duration)
+        reels.append({"parts": parts, "start": parts[0][0], "end": parts[-1][1],
+                      "length": round(sum(b - a for a, b in parts), 1),
+                      "score": round(sum(u["score"] for u in g) / len(g), 2),
+                      "text": " ".join(u["text"] for u in g if u["text"]), "title": "",
+                      "reason": f"{len(parts)} moments from {_fmt(parts[0][0])}–{_fmt(parts[-1][1])}"})
+    return reels
 
 
 SERIES_PROMPT = """A long video is being cut into a short-video series (Part 1, Part 2, ...) that keeps only what matters.
@@ -451,7 +445,7 @@ def llm_title(model, text, k, n):
 
 
 def series(data, info, opts, should_cancel, log):
-    """(parts of the series, method) - LLM marks and titles when Ollama is ready, heuristics otherwise."""
+    """(parts of the series, or highlight reels for the "moments" style, method) - LLM marks and titles when Ollama is ready, heuristics otherwise."""
     model = None
     if opts.get("useLlm") and len(data["segments"]) >= 3:
         installed = ollama_models()
@@ -471,10 +465,11 @@ def series(data, info, opts, should_cancel, log):
         except Exception as ex:  # noqa: BLE001 - heuristics still work
             log(f"LLM failed ({type(ex).__name__}: {str(ex)[:150]}) - using heuristics")
             model = None
-    plan = plan_series(data, info["duration"], int(opts["count"]), float(opts["target"]), marks)
-    for p in plan:
+    planner = plan_moments if opts.get("style") == "moments" else plan_series
+    plan = planner(data, info["duration"], int(opts["count"]), float(opts["target"]), marks)
+    for k, p in enumerate(plan):
         if model and p["text"]:
-            p["title"] = llm_title(model, p["text"], p["part"], p["of"])
+            p["title"] = llm_title(model, p["text"], p.get("part", k + 1), p.get("of", len(plan)))
         if not p["title"] and p["text"]:  # the first whole sentence of the part that says something
             # CJK text has no space after its full stops, and Whisper often joins whole paragraphs with commas
             commas = r"|(?<=[，、,])(?=.{30})" if CJK.search(p["text"]) else ""
@@ -496,79 +491,6 @@ def _ollama_chat(model, prompt, timeout=900):
     req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)["message"]["content"]
-
-
-LLM_PROMPT = """You cut long videos into viral vertical short clips for TikTok / YouTube Shorts.
-Below is the transcript, one numbered sentence per line: [id] start-end text.
-Pick the {n} best moments for short clips. A good clip:
-- starts with a strong hook (a surprising claim, a question, a punchline, an emotional moment) - never mid-thought
-- is self-contained: a viewer who saw nothing else understands it
-- lasts between {min_len} and {max_len} seconds
-- does not overlap another clip
-Answer with JSON only: {{"clips": [{{"start_id": <first sentence id>, "end_id": <last sentence id>,
-"title": "<catchy caption for the clip, in the transcript's language, max 80 characters>",
-"reason": "<why it works, in English, one short sentence>", "score": <1-10>}}]}}
-
-Transcript:
-{lines}"""
-
-
-def llm_moments(segments, count, min_len, max_len, model, should_cancel, log, chunk_chars=24000):
-    """Ask the local LLM for the best moments; long transcripts are sent in chunks and the best answers kept."""
-    lines = [f"[{i}] {_fmt(s['start'])}-{_fmt(s['end'])} {s['text']}" for i, s in enumerate(segments)]
-    chunks, cur = [], []
-    for ln in lines:
-        if cur and sum(len(x) + 1 for x in cur) + len(ln) > chunk_chars:
-            chunks.append(cur)
-            cur = []
-        cur.append(ln)
-    if cur:
-        chunks.append(cur)
-    per_chunk = max(2, -(-count * 2 // len(chunks)))
-    cands = []
-    for k, chunk in enumerate(chunks):
-        if should_cancel():
-            raise Cancelled()
-        log(f"Asking {model} for the best moments" + (f" (part {k + 1}/{len(chunks)})" if len(chunks) > 1 else ""))
-        answer = _ollama_chat(model, LLM_PROMPT.format(n=count + 2 if len(chunks) == 1 else per_chunk,
-                                                       min_len=min_len, max_len=max_len, lines="\n".join(chunk)))
-        try:
-            clips = json.loads(answer).get("clips") or []
-        except ValueError:
-            log(f"The LLM answer was not JSON: {answer[:200]}")
-            continue
-        for c in clips:
-            cand = _fit_ids(segments, c, min_len, max_len)
-            if cand:
-                cands.append(cand)
-    return _choose(cands, count)
-
-
-def _fit_ids(segments, c, min_len, max_len):
-    """LLM sentence ids -> times, stretched/trimmed by whole sentences to fit min_len..max_len."""
-    try:
-        i, j = int(c.get("start_id")), int(c.get("end_id"))
-    except (TypeError, ValueError):
-        return None
-    if not (0 <= i < len(segments)):
-        return None
-    j = min(max(i, j), len(segments) - 1)
-    while j > i and segments[j]["end"] - segments[i]["start"] > max_len:
-        j -= 1
-    while j + 1 < len(segments) and segments[j]["end"] - segments[i]["start"] < min_len \
-            and segments[j + 1]["end"] - segments[i]["start"] <= max_len:
-        j += 1
-    start, end = segments[i]["start"], segments[j]["end"]
-    if end - start > max_len:  # one very long sentence
-        end = start + max_len
-    if end - start < min_len * 0.6:
-        return None
-    try:
-        score = float(c.get("score") or 5)
-    except (TypeError, ValueError):
-        score = 5.0
-    return {"start": start, "end": end, "score": score, "title": str(c.get("title") or "")[:100],
-            "reason": str(c.get("reason") or "")[:200]}
 
 
 # ---------- 4. reframing ----------
@@ -916,32 +838,3 @@ def analyze(ffmpeg, src, info, opts, data_dir, progress, should_cancel, log):
         return data
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-
-
-def pick(data, info, opts, should_cancel, log):
-    """(moments, method): LLM when asked and reachable, heuristics otherwise."""
-    segs, n, lo, hi = data["segments"], int(opts["count"]), float(opts["minLen"]), float(opts["maxLen"])
-    if opts.get("useLlm") and len(segs) >= 3:
-        installed = ollama_models()
-        model = opts.get("llmModel") or DEFAULT_LLM
-        if installed is None:
-            log("Ollama is not running - picking moments with heuristics instead")
-        elif not any(m == model or m.split(":")[0] == model for m in installed):
-            log(f"Ollama has no model “{model}” (installed: {', '.join(installed) or 'none'}) - "
-                f"run “ollama pull {model}”. Picking moments with heuristics instead")
-        else:
-            try:
-                moments = llm_moments(segs, n, lo, hi, model, should_cancel, log)
-                if moments:
-                    if len(moments) < n:  # top up with heuristic picks that do not overlap
-                        extra = [m for m in heuristic_moments(segs, data["loudness"], data["cuts"], info["duration"],
-                                                              n * 3, lo, hi)
-                                 if all(not _overlaps(m, x) for x in moments)]
-                        moments = sorted(moments + extra[:n - len(moments)], key=lambda m: m["start"])
-                    return moments, "llm"
-                log("The LLM returned no usable moments - using heuristics")
-            except Cancelled:
-                raise
-            except Exception as ex:  # noqa: BLE001 - fall back to heuristics
-                log(f"LLM failed ({type(ex).__name__}: {str(ex)[:150]}) - using heuristics")
-    return heuristic_moments(segs, data["loudness"], data["cuts"], info["duration"], n, lo, hi), "heuristic"

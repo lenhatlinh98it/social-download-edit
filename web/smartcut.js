@@ -1,12 +1,11 @@
 "use strict";
 /* Editor mode: Smart cut (owner edition) - a long landscape video -> vertical clips picked by local AI. */
 
-const sc = { source: null, clips: [], plan: [], running: false, len: "20-60", reframe: "face", subPos: "bottom", style: "series", target: 90, ready: false };
+const sc = { source: null, clips: [], plan: [], running: false, reframe: "face", subPos: "bottom", style: "series", target: 90, ready: false };
 
 function scOpts() {
-  const [minLen, maxLen] = sc.len.split("-").map(Number);
   return {
-    style: sc.style, target: sc.target, partLabel: $("#scPartLabel").checked, count: Number($("#scCount").value) || 2, minLen, maxLen, reframe: sc.reframe, subtitles: $("#scSubs").checked, subPos: sc.subPos,
+    style: sc.style, target: sc.target, partLabel: $("#scPartLabel").checked, count: Number($("#scCount").value) || 2, reframe: sc.reframe, subtitles: $("#scSubs").checked, subPos: sc.subPos,
     whisper: $("#scWhisper").value, language: $("#scLang").value, useLlm: $("#scLlm").checked,
     llmModel: $("#scLlmModel").value.trim(),
   };
@@ -43,11 +42,8 @@ function renderSc() {
   $("#scStart").classList.toggle("hidden", sc.running);
   $("#scCancel").classList.toggle("hidden", !sc.running);
   $("#scPick").disabled = $("#scUseUrl").disabled = $("#scUrl").disabled = sc.running;
-  $$("#scLen button").forEach((b) => b.classList.toggle("on", b.dataset.l === sc.len));
   $$("#scStyle button").forEach((b) => b.classList.toggle("on", b.dataset.s === sc.style));
   $$("#scTarget button").forEach((b) => b.classList.toggle("on", Number(b.dataset.t) === sc.target));
-  $("#scTarget").classList.toggle("off", sc.style !== "series");
-  $("#scLen").classList.toggle("off", sc.style === "series");
   $("#scPartLabelRow").hidden = sc.style !== "series";
   $("#scCountLabel").textContent = sc.style === "series" ? "How many parts" : "How many shorts";
   $$("#scReframe button").forEach((b) => b.classList.toggle("on", b.dataset.r === sc.reframe));
@@ -63,8 +59,6 @@ async function scLoadState() {
   if (!sc.ready) {
     const o = res.opts;
     $("#scCount").value = o.count;
-    sc.len = `${o.minLen}-${o.maxLen}`;
-    if (![...$$("#scLen button")].some((b) => b.dataset.l === sc.len)) sc.len = "20-60";
     sc.reframe = o.reframe;
     sc.style = o.style === "moments" ? "moments" : "series";
     $("#scPartLabel").checked = o.partLabel !== false;
@@ -126,10 +120,6 @@ async function scUseUrl() {
 }
 $("#scUseUrl").addEventListener("click", scUseUrl);
 $("#scUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") scUseUrl(); });
-$("#scLen").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-l]");
-  if (b) { sc.len = b.dataset.l; renderSc(); }
-});
 $("#scStyle").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-s]");
   if (b) { sc.style = b.dataset.s; renderSc(); }
