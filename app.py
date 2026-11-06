@@ -239,27 +239,38 @@ def downloaded_file(info):
     return downloads[0].get("filepath") or ""
 
 
-def reel_time(ydl, video):
-    """Upload time of a Facebook reel: the page's "creation_time" next to the reel's own id (the page also
-    carries the times of the suggested reels that follow)."""
+def reel_page(ydl, video):
+    """(upload time, caption) of a Facebook reel from its page: the "creation_time" and "message" next to the
+    reel's own id (the page also carries the ones of the suggested reels that follow)."""
     try:
         html = ydl.urlopen(video["url"]).read().decode("utf-8", "replace")
-    except Exception:  # noqa: BLE001 - the time is optional
-        return None
-    for m in re.finditer(r'"creation_time":(\d{9,10})', html):
-        if video["id"] in html[max(0, m.start() - 3000):m.end() + 3000]:
-            return int(m.group(1))
-    return None
+    except Exception:  # noqa: BLE001 - both are optional
+        return None, ""
+    ids = [m.start() for m in re.finditer(re.escape(video["id"]), html)]
+
+    def nearest(pattern):
+        best = min(((min(abs(m.start() - i) for i in ids), m) for m in re.finditer(pattern, html)),
+                   key=lambda x: x[0], default=(None, None))
+        return best[1] if best[0] is not None and best[0] <= 3000 else None
+
+    when = nearest(r'"creation_time":(\d{9,10})')
+    text = nearest(r'"message":\{"text":"((?:[^"\\]|\\.)*)"')
+    try:
+        caption = json.loads(f'"{text.group(1)}"') if text else ""
+    except ValueError:
+        caption = ""
+    return (int(when.group(1)) if when else None), caption
 
 
-def reel_caption(info, reel_id):
-    """Facebook reels have title 'Video'; the real caption is the description's first line."""
-    for line in (info.get("description") or "").splitlines():
+def reel_caption(info, reel_id, page_caption=""):
+    """Facebook reels have title 'Video' or 'Facebook'; the real caption is the description's (or else the reel
+    page's) first line."""
+    for line in (info.get("description") or page_caption or "").splitlines():
         line = line.strip()
         if line:
             return line[:100].rstrip()
     title = (info.get("title") or "").strip()
-    return title if title and title.lower() != "video" else f"reel_{reel_id}"
+    return title if title and title.lower() not in ("video", "facebook") else f"reel_{reel_id}"
 
 
 def fetch_youtube(url, _status):
@@ -288,6 +299,14 @@ def fetch_youtube(url, _status):
 
 def fetch_facebook(url, status):
     reels, page_name = facebook.fetch_reels(url, lambda n: status(f"Scrolling reels page… found {n}"))
+    if not page_name and reels:  # a personal profile has its name only in the page body: the reel knows it
+        try:
+            with facebook.cookie_copy() as cookies, yt_dlp.YoutubeDL(
+                    {"cookiefile": cookies, "quiet": True, "no_warnings": True}) as ydl:
+                page_name = (ydl.extract_info(reels[0]["url"], download=False).get("uploader") or "").strip()
+        except Exception:  # noqa: BLE001 - fall back to the link
+            pass
+    page_name = page_name or facebook.page_slug(url)
     return [{
         "id": r["id"],
         "url": r["url"],
@@ -669,12 +688,12 @@ class Api:
                     with facebook.cookie_copy() as cookies, yt_dlp.YoutubeDL(
                             {"cookiefile": cookies, "quiet": True, "no_warnings": True}) as ydl:
                         info = ydl.extract_info(video["url"], download=False)
-                        if not info.get("timestamp"):  # yt-dlp gives no upload time for reels
-                            info["timestamp"] = reel_time(ydl, video)
+                        page_time, page_caption = reel_page(ydl, video)  # yt-dlp gives no upload time for reels
+                        info["timestamp"] = info.get("timestamp") or page_time
             except Exception:  # noqa: BLE001 - keep the placeholder title
                 return
             if kind == "facebook":
-                video["title"] = reel_caption(info, video["id"])
+                video["title"] = reel_caption(info, video["id"], page_caption)
             video["duration"] = video.get("duration") or info.get("duration")
             video["uploaded"] = video.get("uploaded") or info.get("timestamp") or info.get("release_timestamp")
         if gen == self._gen[kind]:
@@ -873,7 +892,7 @@ class Api:
                 if kind == "facebook":
                     with facebook.cookie_copy() as cookies, yt_dlp.YoutubeDL({**opts, "cookiefile": cookies}) as ydl:
                         info = ydl.extract_info(v["url"], download=False)
-                        title = reel_caption(info, v["id"])
+                        title = v.get("title") or reel_caption(info, v["id"], reel_page(ydl, v)[1])
                         name, template = self._reserve_template(target_dir, title, f"reel_{v['id']}")
                         info["title"] = title
                         ydl.params["outtmpl"]["default"] = template
