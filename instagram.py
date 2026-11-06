@@ -35,6 +35,10 @@ class LoginRequired(Exception):
     pass
 
 
+class RateLimited(RuntimeError):
+    pass
+
+
 def username_of(url):
     m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", url or "")
     return m.group(1) if m and m.group(1).lower() not in RESERVED_PATHS else ""
@@ -269,6 +273,14 @@ def fetch_user_reels(url, on_progress=None, max_idle_rounds=4):
     return reels, user, not logged_in
 
 
+def _read_reel(page, code):
+    """({mp4, video?, audio?, height}, caption, {duration, uploaded}) once the reel page has it, else None."""
+    for node in _media_nodes(_parse(page.evaluate(JSON_SCRIPTS_JS))):
+        if node["code"] == code and node.get("video_versions"):
+            return _media(node), _caption(node), {"duration": _duration(node), "uploaded": node.get("taken_at")}
+    return None
+
+
 def resolve(code):
     """Open the reel page and read its media links, caption and details:
     ({mp4, video?, audio?, height}, caption, {duration, uploaded})."""
@@ -278,13 +290,51 @@ def resolve(code):
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.goto(video_url(code), wait_until="domcontentloaded", timeout=60000)
             for _ in range(20):
-                for node in _media_nodes(_parse(page.evaluate(JSON_SCRIPTS_JS))):
-                    if node["code"] == code and node.get("video_versions"):
-                        return _media(node), _caption(node), {"duration": _duration(node), "uploaded": node.get("taken_at")}
+                found = _read_reel(page, code)
+                if found:
+                    return found
                 page.wait_for_timeout(500)
         finally:
             ctx.close()
     raise RuntimeError("Could not find the video of this reel (it may be private or removed).")
+
+
+def resolve_many(next_code, on_done, tabs=2):
+    """resolve() for many reels in one browser window, `tabs` reel pages loading at once (each takes ~2 s):
+    next_code() gives the next code or None, on_done(code, result or None) gets each result. Returns when
+    next_code() has nothing left and every page is done."""
+    with _profile_lock, sync_playwright() as p:
+        ctx = _launch(p, headless=True)
+        try:
+            pages = [ctx.pages[0] if ctx.pages else ctx.new_page()] + [ctx.new_page() for _ in range(tabs - 1)]
+            busy, refused = {}, None  # page -> [code, polls]
+            while True:
+                for page in pages:
+                    code = None if page in busy or refused else next_code()
+                    if code is None:
+                        continue
+                    try:
+                        page.goto(video_url(code), wait_until="commit", timeout=60000)
+                        busy[page] = [code, 0]
+                    except Exception as ex:  # noqa: BLE001 - Instagram refuses pages when it limits requests
+                        on_done(code, None)
+                        refused = ex
+                if not busy:
+                    if refused:
+                        raise RateLimited("Instagram stopped answering for now (too many requests). Try again later.")
+                    return
+                pages[0].wait_for_timeout(500)
+                for page, job in list(busy.items()):
+                    try:
+                        found = _read_reel(page, job[0])
+                    except Exception:  # noqa: BLE001 - the page is still navigating
+                        found = None
+                    job[1] += 1
+                    if found or job[1] >= 24:
+                        del busy[page]
+                        on_done(job[0], found)
+        finally:
+            ctx.close()
 
 
 def _remove(*paths):

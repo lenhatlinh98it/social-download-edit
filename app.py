@@ -347,6 +347,10 @@ class Api:
         self._caption_requested = set()
         self._yt_api_gen = None  # YouTube list whose details come from the Data API
         self._meta_pool = ThreadPoolExecutor(max_workers=3)
+        self._ig_lock = threading.Lock()
+        self._ig_wanted = []  # (gen, index) of Instagram cards to resolve, newest request last
+        self._ig_jobs = {}  # reel code -> (gen, index) being resolved
+        self._ig_running = False
         self._cancel = threading.Event()
         self._names_lock = threading.Lock()
         self._reserved_names = set()
@@ -661,21 +665,59 @@ class Api:
         if kind == "youtube" and self._yt_api_gen == gen:
             return  # the YouTube API fills this list in one go
         videos = self._lists[kind]
-        for idx in indices:
+        for idx in reversed(indices):  # the Instagram queue is served last-in first: top card of the screen first
             key = (gen, idx)
             if key in self._caption_requested or idx >= len(videos) or (videos[idx]["title"] and videos[idx].get("uploaded")):
                 continue
             self._caption_requested.add(key)
-            self._meta_pool.submit(self._caption_job, kind, gen, idx, videos[idx])
+            if kind == "instagram":
+                with self._ig_lock:
+                    self._ig_wanted.append(key)
+                    start, self._ig_running = not self._ig_running, True
+                if start:
+                    threading.Thread(target=self._ig_captions, daemon=True).start()
+            else:
+                self._meta_pool.submit(self._caption_job, kind, gen, idx, videos[idx])
 
-    def _caption_job(self, kind, gen, idx, video):
+    def _ig_captions(self):
+        """Resolve Instagram cards in one browser window, a few at a time, the cards the user scrolled to last
+        first - so a long list never keeps the visible cards waiting behind ones scrolled past."""
+        def next_code():
+            with self._ig_lock:
+                while self._ig_wanted:
+                    gen, idx = self._ig_wanted.pop()
+                    if gen == self._gen["instagram"] and idx < len(self._lists["instagram"]):
+                        code = self._lists["instagram"][idx]["id"]
+                        self._ig_jobs[code] = (gen, idx)
+                        return code
+            return None
+
+        def done(code, found):
+            gen, idx = self._ig_jobs.pop(code)
+            if found and gen == self._gen["instagram"]:
+                self._caption_job("instagram", gen, idx, self._lists["instagram"][idx], found)
+
+        while True:
+            try:
+                instagram.resolve_many(next_code, done)
+            except Exception as ex:  # noqa: BLE001 - the cards keep their placeholders
+                message = str(ex) if isinstance(ex, instagram.RateLimited) else \
+                    f"could not load reel details ({type(ex).__name__})"
+                self._log("warning", "fetch", f"Instagram: {message}")
+                self._emit("status", text=f"Instagram: {message}", progress=0)
+                with self._ig_lock:
+                    self._ig_wanted.clear()
+                    self._ig_jobs.clear()
+            with self._ig_lock:
+                if not self._ig_wanted:
+                    self._ig_running = False
+                    return
+
+    def _caption_job(self, kind, gen, idx, video, found=None):
         if gen != self._gen[kind]:
             return
         if kind == "instagram":
-            try:
-                video["media"], caption, meta = instagram.resolve(video["id"])
-            except Exception:  # noqa: BLE001 - keep the placeholder title
-                return
+            video["media"], caption, meta = found
             video["title"] = video["title"] or caption or f"reel_{video['id']}"
             video["duration"] = video.get("duration") or meta["duration"]
             video["uploaded"] = video.get("uploaded") or meta["uploaded"]
