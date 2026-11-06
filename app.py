@@ -1700,6 +1700,12 @@ class Api:
             url = "https://" + url
         kind = detect_kind(url)
         progress("Reading the link…", None)
+        m = re.search(r"(?:[?&]v=|youtu\.be/|/shorts/|/live/|/embed/)([\w-]{11})(?![\w-])", url) if kind == "youtube" else None
+        if m:  # already downloaded: no need to ask YouTube again
+            done = next((os.path.join(folder, f) for f in os.listdir(folder) if f"[{m.group(1)}]" in f and f.endswith(".mp4")), None)
+            if done:
+                log(f"Already downloaded: {os.path.basename(done)}")
+                return done
         if kind == "douyin":
             v = douyin.resolve_video(url)
             vid, title = v["id"], v["title"]
