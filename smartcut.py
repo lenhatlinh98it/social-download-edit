@@ -166,22 +166,77 @@ def scene_scan(ffmpeg, src, should_cancel):
 
 # ---------- 3. choosing the moments ----------
 END_OF_THOUGHT = re.compile(r"[.!?。！？…」』)\"]\s*$")
+SPONSOR = re.compile(r"\b(sponsor(ed|s)?|brought to you by|use (my |the )?code|promo code|discount code|free trial|"
+                     r"link(ed)? (it )?in the description|links? (is )?(down )?below|in the description below|"
+                     r"apply to win|giveaway|sign up (today|now|for free))\b", re.I)
+OUTRO = re.compile(r"\b(subscribe|hit the bell|notification bell|patreon|merch)\b", re.I)
+NAME_STOP = {"The", "This", "That", "These", "Those", "And", "But", "So", "It", "If", "We", "You", "They", "He", "She",
+             "What", "When", "Where", "Why", "How", "Now", "Then", "Okay", "Alright", "Right", "Oh", "Yeah", "Well",
+             "Here", "There", "Let", "Just", "My", "Our", "Your", "Today", "All", "Before", "After", "With", "Being",
+             "Don", "Get", "Time", "Its", "One", "Not", "Also", "Because", "Maybe", "Wow", "Yes", "Hey", "Thank"}
 
 
-def build_units(data, duration, piece=6.0):
+def sponsor_marks(segments):
+    """Sentence id -> -1 for sponsor reads and "like and subscribe", without an LLM (English only).
+    A sponsor read is found by its call to action ("link in the description", "use code"...), then reaches back
+    to where the brand that it keeps naming first comes up - a name that is said there and hardly anywhere else."""
+    def names(text):
+        return {w for w in re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", text) if w not in NAME_STOP}
+    everywhere = {}
+    for x in segments:
+        for w in names(x["text"]):
+            everywhere[w] = everywhere.get(w, 0) + 1
+    marks = {}
+    for h, x in enumerate(segments):
+        if OUTRO.search(x["text"]):
+            marks[h] = -1
+        if not SPONSOR.search(x["text"]):
+            continue
+        near = [i for i, y in enumerate(segments) if x["start"] - 90 <= y["start"] <= x["end"] + 20]
+        here = {}
+        for i in near:
+            for w in names(segments[i]["text"]):
+                here[w] = here.get(w, 0) + 1
+        brands = {w for w, n in here.items() if n >= 2 and n >= 0.7 * everywhere[w]}
+        first = next((i for i in near if names(segments[i]["text"]) & brands), h)
+        last = max([h] + [i for i in near if i > h and names(segments[i]["text"]) & brands])
+        while last + 1 < len(segments) and not END_OF_THOUGHT.search(segments[last]["text"]):
+            last += 1
+        for i in range(min(first, h), last + 1):
+            marks[i] = -1
+    return marks
+
+
+def build_units(data, duration, piece=6.0, marks=None, min_talk=8.0):
     """Blocks the series is built from; nothing is ever cut inside one.
     Speech: sentences chained into one thought until a sentence really ends (. ? ! 。) - so a clip never stops
-    mid-sentence and the next part never starts with the rest of it. Between the talking: shots from the scene
-    cuts, long shots split into ~`piece` s."""
+    mid-sentence and the next part never starts with the rest of it - and short thoughts joined up to ~`min_talk` s,
+    so a talk is not cut into 2-second scraps. Filler (sponsor reads...) is never joined with the talk around it.
+    Between the talking: shots from the scene cuts, long shots split into ~`piece` s."""
     segs, cuts = data["segments"], sorted(data["cuts"])
-    chains = []
+    marks = marks or {}
+    pieces = []  # (sentence id, sentence): a Whisper line can end one sentence and start the next
     for i, s in enumerate(segs):
+        words, first = s.get("words") or [], 0
+        for k, w in enumerate(words[:-1]):
+            if END_OF_THOUGHT.search(w["word"]):
+                part = words[first:k + 1]
+                pieces.append((i, {"start": s["start"] if not first else part[0]["start"], "end": w["end"],
+                                   "text": "".join(x["word"] for x in part).strip()}))
+                first = k + 1
+        pieces.append((i, s if not first else {"start": words[first]["start"], "end": s["end"],
+                                               "text": "".join(x["word"] for x in words[first:]).strip()}))
+    chains = []
+    for i, s in pieces:
         last = chains[-1] if chains else None
-        if last and not END_OF_THOUGHT.search(last["text"]) and s["start"] - last["b"] < 1.5 and s["end"] - last["a"] < 45:
+        filler = marks.get(i) == -1
+        if last and s["start"] - last["b"] < 1.5 and s["end"] - last["a"] < 45 and last["filler"] == filler \
+                and (not END_OF_THOUGHT.search(last["text"]) or last["b"] - last["a"] < min_talk):
             last["b"], last["text"] = s["end"], last["text"] + " " + s["text"]
-            last["ids"].append(i)
+            if last["ids"][-1] != i:
+                last["ids"].append(i)
         else:
-            chains.append({"a": s["start"], "b": s["end"], "text": s["text"], "ids": [i], "kind": "speech"})
+            chains.append({"a": s["start"], "b": s["end"], "text": s["text"], "ids": [i], "kind": "speech", "filler": filler})
     units, pos = [], 0.0
     for k, c in enumerate(chains + [None]):
         gap_end = c["a"] if c else duration
@@ -195,7 +250,8 @@ def build_units(data, duration, piece=6.0):
                 shots.append([a, b])
         for a, b in shots:
             n = max(1, round((b - a) / piece))
-            units += [{"a": a + j * (b - a) / n, "b": a + (j + 1) * (b - a) / n, "text": "", "ids": [], "kind": "visual"}
+            units += [{"a": a + j * (b - a) / n, "b": a + (j + 1) * (b - a) / n, "text": "", "ids": [], "kind": "visual",
+                   "filler": False}
                       for j in range(n)]
         if c:
             units.append(dict(c))
@@ -259,19 +315,20 @@ def _parts(units, data, duration):
 def plan_series(data, duration, count, target, llm_marks=None):
     """Part 1..N in story order: the best blocks spread over the whole video (about count x target seconds),
     then split where the story pauses. Returns [{parts, start, end, length, score, text, ...}]."""
-    units = build_units(data, duration)
+    units = build_units(data, duration, marks=llm_marks)
     if not units:
         return []
     score_units(units, data, duration, llm_marks)
     budget = count * target
     keep = set()
-    if sum(u["b"] - u["a"] for u in units) <= budget * 1.05:
-        keep = set(range(len(units)))
+    if sum(u["b"] - u["a"] for u in units if not u["filler"]) <= budget * 1.05:
+        keep = {i for i, u in enumerate(units) if not u["filler"]}
     else:
         bins = max(count * 3, round(budget / 8))  # one strong block from each stretch first: the series covers it all
         for j in range(bins):
             lo, hi = duration * j / bins, duration * (j + 1) / bins
-            best = max((i for i, u in enumerate(units) if lo <= u["a"] < hi and u["b"] - u["a"] <= target * 0.6),
+            best = max((i for i, u in enumerate(units) if lo <= u["a"] < hi and u["b"] - u["a"] <= target * 0.6
+                        and not u["filler"]),
                        key=lambda i: units[i]["score"], default=None)
             if best is not None and units[best]["score"] > -0.3:
                 keep.add(best)
@@ -279,12 +336,12 @@ def plan_series(data, duration, count, target, llm_marks=None):
         for i in sorted(range(len(units)), key=lambda i: -units[i]["score"]):
             if total >= budget:
                 break
-            if i not in keep and units[i]["b"] - units[i]["a"] <= target * 0.6:
+            if i not in keep and units[i]["b"] - units[i]["a"] <= target * 0.6 and not units[i]["filler"]:
                 keep.add(i)
                 total += units[i]["b"] - units[i]["a"]
         # fill short holes between kept blocks: smoother story, fewer jumps
         for i in range(1, len(units) - 1):
-            if i not in keep and i - 1 in keep and i + 1 in keep and units[i]["b"] - units[i]["a"] < 3 \
+            if i not in keep and i - 1 in keep and i + 1 in keep and units[i]["b"] - units[i]["a"] < 3 and not units[i]["filler"] \
                     and total < budget * 1.05:
                 keep.add(i)
                 total += units[i]["b"] - units[i]["a"]
@@ -329,12 +386,12 @@ def plan_moments(data, duration, count, target, llm_marks=None):
     The video is split into equal stretches and every stretch gives each short one of its best blocks, so a
     short shows every stage of the video (arriving, making the fire, cooking, eating...) rather than only the
     loudest or busiest one, and ends on the result. Shorts never share a block. Returns [{parts, start, end, length, score, text, ...}]."""
-    units = build_units(data, duration, piece=5.0)
+    units = build_units(data, duration, piece=5.0, marks=llm_marks)
     if not units:
         return []
     talk = score_units(units, data, duration, llm_marks)
     longest = max(8.0, target * 0.35)  # a long talk would eat the whole reel
-    ok = [i for i, u in enumerate(units) if u["b"] - u["a"] <= longest]
+    ok = [i for i, u in enumerate(units) if u["b"] - u["a"] <= longest and not u["filler"]]
     owner = {}  # unit index -> short
     # footage usually ends on the result (the dish served, the clean car): a calm shot that never scores high,
     # so every reel ends on the start of the video's last scene. Talks end on "subscribe" instead - not there.
@@ -456,10 +513,12 @@ def series(data, info, opts, should_cancel, log):
             log(f"Ollama has no model “{want}” - run “ollama pull {want}”. Choosing the blocks with heuristics")
         else:
             model = want
-    marks = None
+    marks = sponsor_marks(data["segments"])
+    if marks:
+        log(f"Left out {len(marks)} sentence(s) of sponsor reads and “subscribe” asks")
     if model:
         try:
-            marks = llm_marks(data["segments"], model, should_cancel, log)
+            marks = {**llm_marks(data["segments"], model, should_cancel, log), **marks}
         except Cancelled:
             raise
         except Exception as ex:  # noqa: BLE001 - heuristics still work
