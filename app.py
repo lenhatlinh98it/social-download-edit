@@ -21,6 +21,7 @@ import douyin
 import editor
 import engine
 import facebook
+import hashtags
 import instagram
 import edition
 import license
@@ -1403,6 +1404,26 @@ class Api:
             return {"error": str(ex)}
         save_setting("ttChromeRoot", result[0])
         return self.tt_state()
+
+    def tt_hashtags(self, caption, country):
+        """{ok, caption, tags}: the caption with 5 viral hashtags for the TikTok account's country at its end."""
+        settings = load_settings()
+        title = hashtags.append(caption, [])  # the title without hashtags added before
+        try:
+            tags = hashtags.generate(title, country, settings.get("geminiApiKey") or "", settings.get("hashtagPrompt") or "",
+                                     lambda m: self._log("info", "tiktok", m))
+        except hashtags.HashtagError as ex:
+            return {"ok": False, "error": str(ex)}
+        return {"ok": True, "tags": tags, "caption": hashtags.append(caption, tags)}
+
+    def tt_hashtag_settings(self, key=None, prompt=None):
+        """Read, or save when given, the Gemini key and the hashtag prompt ("" = the default prompt)."""
+        if key is not None:
+            save_setting("geminiApiKey", key.strip())
+        if prompt is not None:
+            save_setting("hashtagPrompt", "" if prompt.strip() == hashtags.DEFAULT_PROMPT.strip() else prompt.strip())
+        settings = load_settings()
+        return {"hasKey": bool(settings.get("geminiApiKey")), "prompt": settings.get("hashtagPrompt") or hashtags.DEFAULT_PROMPT}
 
     def tt_set_country(self, profile_dir, country):
         countries = load_settings().get("ttCountries") or {}

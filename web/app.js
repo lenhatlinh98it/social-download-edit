@@ -632,6 +632,7 @@ async function loadTT() {
   if (!api) return;
   Object.assign(tt, await api.tt_state());
   renderTT();
+  loadHashtagSettings();
 }
 
 function renderTT() {
@@ -693,6 +694,7 @@ async function openPostDialog(file, title) {
     `<option value="${esc(p.dir)}">${esc(p.name)}${p.country ? ` — VPN ${p.country}` : ""}</option>`).join("");
   if (tt.profiles.some((p) => p.dir === tt.lastProfile)) $("#ttProfile").value = tt.lastProfile;
   $("#ttCaption").value = title || "";
+  delete $("#ttCaption").dataset.tagsFor;
   $("#ttSchedule").checked = false;
   $("#ttWhen").classList.add("off");
   $("#ttReview").checked = false;
@@ -749,6 +751,8 @@ async function openPostManyDialog(items) {
     return;
   }
   ttm.items = items.map((it) => ({ ...it, when: "" }));
+  delete ttm.tagsFor;
+  $("#ttmTagsNote").textContent = "";
   $("#ttmTitle").textContent = `Post ${items.length} videos to TikTok`;
   $("#ttmProfile").innerHTML = tt.profiles.map((p) =>
     `<option value="${esc(p.dir)}">${esc(p.name)}${p.country ? ` — VPN ${p.country}` : ""}</option>`).join("");
@@ -882,6 +886,78 @@ $("#ttChoose").addEventListener("click", async () => {
   toast("success", `Found ${tt.profiles.length} Chrome profiles`, tt.root);
 });
 $("#ttRefresh").addEventListener("click", loadTT);
+
+/* ---------- hashtags: 5 viral tags for the profile's country, from Gemini ---------- */
+const profileCountry = (dir) => tt.profiles.find((p) => p.dir === dir)?.country || "";
+
+async function loadHashtagSettings() {
+  const s = await api.tt_hashtag_settings();
+  $("#ttGeminiKey").value = "";
+  $("#ttGeminiKey").placeholder = s.hasKey ? "Gemini API key saved — paste a new one to replace it" : "Gemini API key";
+  $("#ttPrompt").value = s.prompt;
+}
+$("#ttGeminiLink").addEventListener("click", (e) => { e.preventDefault(); api.open_url("https://aistudio.google.com/apikey"); });
+$("#ttGeminiSave").addEventListener("click", async () => {
+  const key = $("#ttGeminiKey").value.trim();
+  if (!key) return;
+  await api.tt_hashtag_settings(key, null);
+  await loadHashtagSettings();
+  toast("success", "Gemini key saved");
+});
+$("#ttPromptSave").addEventListener("click", async () => {
+  await api.tt_hashtag_settings(null, $("#ttPrompt").value);
+  toast("success", "Prompt saved");
+});
+$("#ttPromptReset").addEventListener("click", async () => {
+  await api.tt_hashtag_settings(null, "");
+  await loadHashtagSettings();
+});
+
+async function addHashtags(caption, country, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Asking Gemini…";
+  try {
+    return await api.tt_hashtags(caption, country);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+$("#ttTags").addEventListener("click", async () => {
+  const country = profileCountry($("#ttProfile").value);
+  const res = await addHashtags($("#ttCaption").value, country, $("#ttTags"));
+  if (!res.ok) { toast("error", "No hashtags", res.error); return; }
+  $("#ttCaption").value = res.caption;
+  $("#ttCaption").dataset.tagsFor = country;
+});
+$("#ttProfile").addEventListener("change", () => {
+  const made = $("#ttCaption").dataset.tagsFor;
+  if (made !== undefined && made !== profileCountry($("#ttProfile").value)) {
+    toast("info", `The hashtags were made for ${made || "no country"}`, "Press # Hashtags again for this profile's country.");
+  }
+});
+
+$("#ttmTags").addEventListener("click", async () => {
+  const country = profileCountry($("#ttmProfile").value);
+  let done = 0;
+  for (const [i, it] of ttm.items.entries()) {
+    $("#ttmTagsNote").textContent = `Video ${i + 1}/${ttm.items.length}…`;
+    const res = await addHashtags(it.caption, country, $("#ttmTags"));
+    if (!res.ok) { toast("error", `No hashtags for video ${i + 1}`, res.error); break; }
+    it.caption = res.caption;
+    done += 1;
+  }
+  $("#ttmTagsNote").textContent = done ? `Hashtags for ${country || "no country"} added to ${done} video(s)` : "";
+  ttm.tagsFor = done ? country : ttm.tagsFor;
+  renderPostManyRows();
+});
+$("#ttmProfile").addEventListener("change", () => {
+  if (ttm.tagsFor !== undefined && ttm.tagsFor !== profileCountry($("#ttmProfile").value)) {
+    toast("info", `The hashtags were made for ${ttm.tagsFor || "no country"}`, "Press # Hashtags for all again for this profile's country.");
+  }
+});
 $("#ttProfiles").addEventListener("change", async (e) => {
   const row = e.target.closest(".tt-row");
   if (!row) return;

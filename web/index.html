@@ -266,6 +266,21 @@
         </div>
         <div class="tt-list" id="ttProfiles"></div>
         <div class="saved-head">
+          <h2>Hashtags</h2>
+          <span class="muted"># Hashtags in the post dialog asks Google Gemini for 5 viral hashtags in the profile's country. The key is free:
+            <a href="#" id="ttGeminiLink">Google AI Studio → Get API key</a>.</span>
+        </div>
+        <div class="tt-bar glass tt-tags">
+          <input type="password" id="ttGeminiKey" placeholder="Gemini API key" spellcheck="false" autocomplete="off">
+          <button class="btn primary sm" id="ttGeminiSave">Save key</button>
+          <details class="tt-prompt"><summary>Prompt</summary>
+            <textarea id="ttPrompt" rows="6" spellcheck="false"></textarea>
+            <div class="cap-head"><span class="muted">{title} = the caption, {market} = the profile's country</span>
+              <span><button class="btn ghost sm" id="ttPromptReset">Default</button>
+              <button class="btn primary sm" id="ttPromptSave">Save prompt</button></span></div>
+          </details>
+        </div>
+        <div class="saved-head">
           <h2>Recent posts</h2>
           <span class="muted">Close every Chrome Portable window before the first post — Grabber reopens it with remote control on.</span>
         </div>
@@ -806,7 +821,8 @@
         <select id="ttProfile"></select>
       </div>
       <div class="field grow">
-        <label for="ttCaption">Title / caption</label>
+        <div class="cap-head"><label for="ttCaption">Title / caption</label>
+          <button type="button" class="btn ghost sm" id="ttTags" title="Add 5 viral hashtags for this profile's country (Gemini)"># Hashtags</button></div>
         <textarea id="ttCaption" rows="4" maxlength="4000" spellcheck="false" placeholder="Caption, #hashtags…"></textarea>
       </div>
       <label class="ed-check"><input type="checkbox" id="ttSchedule"> Schedule</label>
@@ -847,6 +863,8 @@
         <button type="button" class="btn ghost sm" id="ttmFill">Fill times</button>
         <span class="ttm-plan" id="ttmPlan"></span>
       </div>
+      <div class="cap-head"><span class="muted" id="ttmTagsNote"></span>
+        <button type="button" class="btn ghost sm" id="ttmTags" title="Add 5 viral hashtags to every caption, for this profile's country (Gemini)"># Hashtags for all</button></div>
       <div class="ttm-rows" id="ttmRows"></div>
       <label class="ed-check"><input type="checkbox" id="ttmReview" checked> Stop before Post — fill every video in its own tab, I'll check them and press Post myself</label>
       <div class="muted ttm-note">The VPN is checked once, then the videos are uploaded one after another, each in a new tab of the profile.</div>
