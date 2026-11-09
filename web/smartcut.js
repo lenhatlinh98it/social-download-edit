@@ -48,8 +48,10 @@ function renderSc() {
   $("#scCountLabel").textContent = sc.style === "series" ? "How many parts" : "How many shorts";
   $$("#scReframe button").forEach((b) => b.classList.toggle("on", b.dataset.r === sc.reframe));
   $$("#scSubPos button").forEach((b) => b.classList.toggle("on", b.dataset.p === sc.subPos));
-  $("#scSubPos").classList.toggle("off", !$("#scSubs").checked);
-  $("#scLlmModel").disabled = !$("#scLlm").checked;
+  const noSpeech = $("#scWhisper").value === "off";  // captions, language and the LLM all need the transcript
+  $("#scSubs").disabled = $("#scLang").disabled = $("#scLlm").disabled = noSpeech;
+  $("#scSubPos").classList.toggle("off", noSpeech || !$("#scSubs").checked);
+  $("#scLlmModel").disabled = noSpeech || !$("#scLlm").checked;
   $("#scDone").hidden = sc.running || !sc.clips.length;
 }
 
@@ -133,6 +135,7 @@ $("#scReframe").addEventListener("click", (e) => {
   if (b) { sc.reframe = b.dataset.r; renderSc(); }
 });
 $("#scLlm").addEventListener("change", renderSc);
+$("#scWhisper").addEventListener("change", renderSc);
 $("#scSubs").addEventListener("change", renderSc);
 $("#scSubPos").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]");

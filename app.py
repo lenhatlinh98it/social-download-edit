@@ -1742,7 +1742,7 @@ class Api:
         opts["count"] = min(max(int(opts["count"]), 1), 20)
         opts["style"] = "moments" if opts["style"] == "moments" else "series"
         opts["target"] = min(max(float(opts["target"]), 20), 180)
-        if opts["whisper"] not in smartcut.WHISPER_MODELS:
+        if opts["whisper"] not in (*smartcut.WHISPER_MODELS, "off"):
             opts["whisper"] = "small"
         if opts["reframe"] not in ("face", "center", "fit"):
             opts["reframe"] = "face"

@@ -889,6 +889,10 @@ def analyze(ffmpeg, src, info, opts, data_dir, progress, should_cancel, log):
             progress("Reading the audio…", 0.01)
             extract_audio(ffmpeg, src, wav)
             loud = loudness(wav)
+        if info.get("hasAudio") and opts["whisper"] == "off":
+            segments, lang = [], ""
+            log("Speech model is off: picking moments from the scenes and the sound only, without captions")
+        elif info.get("hasAudio"):
             progress(f"Loading Whisper {opts['whisper']} (downloaded on first use)…", 0.03)
             segments, lang = transcribe(wav, opts["whisper"], os.path.join(data_dir, "models"), opts.get("language"),
                                         lambda f: progress(f"Transcribing… {round(f * 100)}%", 0.03 + 0.5 * f),
