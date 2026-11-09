@@ -1883,6 +1883,7 @@ class Api:
                 progress("Getting the face detector…", 0.62)
                 yunet = smartcut.ensure_yunet(os.path.join(facebook.DATA_DIR, "models"))
             stem = os.path.splitext(name)[0]
+            video_title = re.sub(r"\s*\[[\w-]{6,}\]$", "", stem).strip() or stem  # a downloaded video ends in " [id]"
             folder = os.path.join(os.path.dirname(path), safe_name(f"{stem} - smart cut", fallback="smart cut"))
             os.makedirs(folder, exist_ok=True)
             span = 0.37 / len(moments)
@@ -1905,13 +1906,10 @@ class Api:
                     segs = data["segments"] if opts["subtitles"] else []
                     if smartcut.write_ass(tmp_subs, segs, m["parts"], data["language"], opts["subPos"], label):
                         subs = tmp_subs
-                title = m.get("title") or ""
-                if m.get("part"):  # series: "Part 2/3 · <caption>" for TikTok, "Part 2 - <caption>" as the file name
-                    stem_name = f"Part {m['part']} - {title}" if title else f"Part {m['part']}"
-                    title = f"Part {m['part']}/{m['of']}" + (f" · {title}" if title else "")
-                else:
-                    stem_name = f"{i + 1:02d} - {title or smartcut._fmt(start).replace(':', '.')}"
-                dst = editor.unique_output(folder, safe_name(stem_name, fallback=f"clip {i + 1}", limit=80))
+                # the video's own title, so the file name is the TikTok caption as it is: "<title> Part 2" / "<title> 2"
+                suffix = f"Part {m['part']}" if m.get("part") else f"{i + 1}"
+                title = f"{video_title} {suffix}"
+                dst = editor.unique_output(folder, f"{safe_name(video_title, fallback='clip', limit=100)} {suffix}")
                 last = [0.0]
 
                 def on_progress(frac, i=i, base=base):
