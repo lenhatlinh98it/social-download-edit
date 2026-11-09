@@ -1049,6 +1049,11 @@ const handlers = {
       if (!v) continue;
       if (it.duration) v.duration = it.duration;
       if (it.uploaded) v.uploaded = it.uploaded;
+      if (it.title && it.title !== v.title) {
+        v.title = it.title;
+        const t = $(".title", cardEl(e.kind, it.index) || document.createElement("div"));
+        if (t) { t.textContent = it.title; t.title = it.title; }
+      }
       updateCardMeta(e.kind, it.index);
     }
   },
