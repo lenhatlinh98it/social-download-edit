@@ -84,16 +84,28 @@ def extract_audio(ffmpeg, src, dst):
         raise RuntimeError("Cannot read the audio: " + r.stderr.strip()[-200:])
 
 
+_whisper_models = {}  # (name, device, compute) -> WhisperModel, kept for the next video
+
+
+def _whisper(model_name, device, compute, models_dir):
+    """Load a Whisper model once per app run: loading it again for the next video asks Hugging Face again and,
+    with CUDA on Windows, freeing the previous model can hang - so a model is never dropped."""
+    key = (model_name, device, compute)
+    if key not in _whisper_models:
+        from faster_whisper import WhisperModel
+        _whisper_models[key] = WhisperModel(model_name, device=device, compute_type=compute,
+                                            download_root=os.path.join(models_dir, "whisper"))
+    return _whisper_models[key]
+
+
 def transcribe(wav, model_name, models_dir, language, on_progress, should_cancel, log):
     """Segments [{start, end, text, words: [{start, end, word}]}] and the detected language."""
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-    from faster_whisper import WhisperModel
     _add_cuda_dlls()
     attempts = [("cuda", "float16"), ("cpu", "int8")] if cuda_devices() else [("cpu", "int8")]
     for i, (device, compute) in enumerate(attempts):
         try:
-            model = WhisperModel(model_name, device=device, compute_type=compute,
-                                 download_root=os.path.join(models_dir, "whisper"))
+            model = _whisper(model_name, device, compute, models_dir)
             segments, info = model.transcribe(wav, language=language or None, vad_filter=True, word_timestamps=True,
                                               beam_size=5 if device == "cuda" else 1)
             out = []
@@ -877,6 +889,10 @@ def analyze(ffmpeg, src, info, opts, data_dir, progress, should_cancel, log):
             progress("Reading the audio…", 0.01)
             extract_audio(ffmpeg, src, wav)
             loud = loudness(wav)
+        if info.get("hasAudio") and opts["whisper"] == "off":
+            segments, lang = [], ""
+            log("Speech model is off: picking moments from the scenes and the sound only, without captions")
+        elif info.get("hasAudio"):
             progress(f"Loading Whisper {opts['whisper']} (downloaded on first use)…", 0.03)
             segments, lang = transcribe(wav, opts["whisper"], os.path.join(data_dir, "models"), opts.get("language"),
                                         lambda f: progress(f"Transcribing… {round(f * 100)}%", 0.03 + 0.5 * f),

@@ -273,6 +273,17 @@ def reel_caption(info, reel_id, page_caption=""):
     return title if title and title.lower() not in ("video", "facebook") else f"reel_{reel_id}"
 
 
+def youtube_original_title(video_id):
+    """The title as the creator wrote it: YouTube shows yt-dlp the creator's English translation when there is
+    one, oEmbed always gives the original. "" when it can't be read."""
+    url = "https://www.youtube.com/oembed?format=json&url=" + urllib.parse.quote(f"https://www.youtube.com/shorts/{video_id}")
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            return (json.load(r).get("title") or "").strip()
+    except (OSError, ValueError):
+        return ""
+
+
 def fetch_youtube(url, _status):
     opts = {"extract_flat": "in_playlist", "quiet": True, "skip_download": True}
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -726,6 +737,9 @@ class Api:
                 if kind == "youtube":
                     with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
                         info = ydl.extract_info(video["url"], download=False, process=False)
+                    if not video.get("titleOk"):
+                        video["title"] = youtube_original_title(video["id"]) or video["title"]
+                        video["titleOk"] = True
                 else:
                     with facebook.cookie_copy() as cookies, yt_dlp.YoutubeDL(
                             {"cookiefile": cookies, "quiet": True, "no_warnings": True}) as ydl:
@@ -746,12 +760,13 @@ class Api:
         """Duration and upload time of a fetched YouTube list from the Data API (50 videos per call, 1 unit each)."""
         key = load_settings().get("youtubeApiKey") or ""
         by_id = {v["id"]: i for i, v in enumerate(videos)}
-        ids = [v["id"] for v in videos if not v.get("uploaded")]
+        ids = [v["id"] for v in videos if not v.get("uploaded") or not v.get("titleOk")]
         for start in range(0, len(ids), 50):
             if gen != self._gen["youtube"]:
                 return
             query = urllib.parse.urlencode({"part": "contentDetails,snippet", "id": ",".join(ids[start:start + 50]),
-                                            "fields": "items(id,contentDetails/duration,snippet/publishedAt)", "key": key})
+                                            "fields": "items(id,contentDetails/duration,snippet/publishedAt,snippet/title)",
+                                            "key": key})
             try:
                 with urllib.request.urlopen(f"https://www.googleapis.com/youtube/v3/videos?{query}", timeout=20) as r:
                     items = json.load(r).get("items") or []
@@ -766,12 +781,15 @@ class Api:
                     continue
                 v = videos[i]
                 v["duration"] = v.get("duration") or iso_duration((it.get("contentDetails") or {}).get("duration"))
+                original = ((it.get("snippet") or {}).get("title") or "").strip()  # not the creator's translation
+                if original:
+                    v["title"], v["titleOk"] = original, True
                 published = (it.get("snippet") or {}).get("publishedAt") or ""
                 try:
                     v["uploaded"] = int(datetime.datetime.fromisoformat(published.replace("Z", "+00:00")).timestamp())
                 except ValueError:
                     pass
-                out.append({"index": i, "duration": v.get("duration"), "uploaded": v.get("uploaded")})
+                out.append({"index": i, "duration": v.get("duration"), "uploaded": v.get("uploaded"), "title": v["title"]})
             if gen == self._gen["youtube"] and out:
                 self._emit("meta", kind="youtube", gen=gen, items=out)
 
@@ -960,6 +978,9 @@ class Api:
                         file = instagram.download(v["media"], path, ffmpeg, progress, self._cancel.is_set,
                                                   yt_dlp.utils.DownloadCancelled)
                 else:
+                    if kind == "youtube" and not v.get("titleOk"):  # the card was never shown: no original title yet
+                        v["title"] = youtube_original_title(v["id"]) or v["title"]
+                        v["titleOk"] = True
                     title = v["title"]
                     name, template = self._reserve_template(target_dir, title, v["id"])
                     with yt_dlp.YoutubeDL({**opts, "outtmpl": template}) as ydl:
@@ -1742,7 +1763,7 @@ class Api:
         opts["count"] = min(max(int(opts["count"]), 1), 20)
         opts["style"] = "moments" if opts["style"] == "moments" else "series"
         opts["target"] = min(max(float(opts["target"]), 20), 180)
-        if opts["whisper"] not in smartcut.WHISPER_MODELS:
+        if opts["whisper"] not in (*smartcut.WHISPER_MODELS, "off"):
             opts["whisper"] = "small"
         if opts["reframe"] not in ("face", "center", "fit"):
             opts["reframe"] = "face"
@@ -1775,7 +1796,8 @@ class Api:
                 info = ydl.extract_info(url, download=False, process=False)
             if info.get("_type") in ("playlist", "multi_video"):
                 raise RuntimeError("This is a playlist or channel link - paste the link of one video.")
-            vid, title = info["id"], info.get("title") or info["id"]
+            vid = info["id"]
+            title = youtube_original_title(vid) or info.get("title") or vid  # not the creator's English translation
         tag = f"[{vid}]"
         done = next((os.path.join(folder, f) for f in os.listdir(folder) if tag in f and f.endswith(".mp4")), None)
         if done:
@@ -1861,6 +1883,7 @@ class Api:
                 progress("Getting the face detector…", 0.62)
                 yunet = smartcut.ensure_yunet(os.path.join(facebook.DATA_DIR, "models"))
             stem = os.path.splitext(name)[0]
+            video_title = re.sub(r"\s*\[[\w-]{6,}\]$", "", stem).strip() or stem  # a downloaded video ends in " [id]"
             folder = os.path.join(os.path.dirname(path), safe_name(f"{stem} - smart cut", fallback="smart cut"))
             os.makedirs(folder, exist_ok=True)
             span = 0.37 / len(moments)
@@ -1883,13 +1906,10 @@ class Api:
                     segs = data["segments"] if opts["subtitles"] else []
                     if smartcut.write_ass(tmp_subs, segs, m["parts"], data["language"], opts["subPos"], label):
                         subs = tmp_subs
-                title = m.get("title") or ""
-                if m.get("part"):  # series: "Part 2/3 · <caption>" for TikTok, "Part 2 - <caption>" as the file name
-                    stem_name = f"Part {m['part']} - {title}" if title else f"Part {m['part']}"
-                    title = f"Part {m['part']}/{m['of']}" + (f" · {title}" if title else "")
-                else:
-                    stem_name = f"{i + 1:02d} - {title or smartcut._fmt(start).replace(':', '.')}"
-                dst = editor.unique_output(folder, safe_name(stem_name, fallback=f"clip {i + 1}", limit=80))
+                # the video's own title, so the file name is the TikTok caption as it is: "<title> Part 2" / "<title> 2"
+                suffix = f"Part {m['part']}" if m.get("part") else f"{i + 1}"
+                title = f"{video_title} {suffix}"
+                dst = editor.unique_output(folder, f"{safe_name(video_title, fallback='clip', limit=100)} {suffix}")
                 last = [0.0]
 
                 def on_progress(frac, i=i, base=base):

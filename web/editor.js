@@ -819,8 +819,9 @@ function updateTimeline() {
   $("#tlRange").style.width = pct(ed.end - ed.start);
   $("#tlStart").style.left = pct(ed.start);
   $("#tlEnd").style.left = pct(ed.end);
-  $("#tlHead").style.left = pct(video.currentTime);
-  $("#edTime").textContent = fmt(video.currentTime);
+  const now = pendingSeek ?? video.currentTime;  // where a drag is heading, before the player gets there
+  $("#tlHead").style.left = pct(now);
+  $("#edTime").textContent = fmt(now);
   $("#edTrim").textContent = `${fmt(ed.start)} – ${fmt(ed.end)}  (${fmt(ed.end - ed.start)})`;
 }
 
@@ -852,6 +853,7 @@ $("#timeline").addEventListener("pointerdown", (e) => {
     if (target === "start") ed.start = Math.min(t, ed.end - 0.1);
     else if (target === "end") ed.end = Math.max(t, ed.start + 0.1);
     seekTo(target === "end" ? ed.end : target === "start" ? ed.start : Math.min(Math.max(t, ed.start), ed.end));
+    updateTimeline();  // the handles follow the pointer now; the preview frame follows when the seek is done
     kick();
   };
   apply(e);
