@@ -1128,13 +1128,13 @@ class Api:
         return research.Research(key, facebook.DATA_DIR, self._tools()[0], load_settings().get("ttChromeRoot") or "",
                                  log, progress, self._research_cancel.is_set)
 
-    def research_state(self, market="US"):
+    def research_state(self, market="US", fmt="shorts"):
         if not research:
             return {"ok": False, "error": "Not available in this edition."}
         try:
             r = self._research()
             has_key, quota, niches = True, r.quota(), r.niche_results(market)
-            last = (r.cache.get("runs") or {}).get(market)
+            last = (r.cache.get("runs") or {}).get(market if fmt != "long" else f"{market}/long")
         except research.ResearchError:
             has_key, quota, niches, last = False, 0, [], None
         lang = research.MARKETS.get(market, research.MARKETS["US"])["lang"]
@@ -1217,8 +1217,9 @@ class Api:
         rows = r.research_niches(market, count)
         self._emit("researchDone", kind="niches", market=market, niches=rows)
 
-    def research_channels(self, market, niche):
-        """`niche`: a catalog id or a free-text keyword typed by the user."""
+    def research_channels(self, market, niche, fmt="shorts"):
+        """`niche`: a catalog id or a free-text keyword typed by the user; `fmt`: "shorts" channels or "long"-video
+        channels (to cut with Smart cut)."""
         if not research:
             return {"ok": False, "error": "Not available in this edition."}
         niche = (niche or "").strip()
@@ -1226,9 +1227,9 @@ class Api:
             return {"ok": False, "error": "Choose a market and a niche."}
         if not load_settings().get("ttChromeRoot"):
             return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first (the TikTok check runs in its 'Research' profile)."}
-        return self._start_research("channels", self._research_channels_task, market, niche)
+        return self._start_research("channels", self._research_channels_task, market, niche, fmt == "long")
 
-    def _research_channels_task(self, market, niche):
+    def _research_channels_task(self, market, niche, long=False):
         r = self._research()
         lang = research.MARKETS[market]["lang"]
         typed = niche.casefold()
@@ -1236,8 +1237,9 @@ class Api:
             (n for n in research.NICHES if typed == n[1].casefold() or any(typed == k.casefold() for ks in n[2].values() for k in ks)), None)
         name, keywords = (entry[1], entry[2][lang][:2]) if entry else (niche, [niche])
         topic_words = [name, *keywords, *entry[2]["en"]] if entry else []
-        self._log("info", "research", f"Finding Shorts channels for “{name}” in {market}", ", ".join(keywords))
-        found = r.find_channels(market, keywords, topic_words)
+        kind = "long-video" if long else "Shorts"
+        self._log("info", "research", f"Finding {kind} channels for “{name}” in {market}", ", ".join(keywords))
+        found = r.find_channels(market, keywords, topic_words, long=long)
         candidates = found[:25]
         if candidates:
             r.check_tiktok(candidates, stop_after=5)
@@ -1245,19 +1247,19 @@ class Api:
         free = [c for c in checked if c["tiktok"]["verdict"] in ("none", "reup")]
         free.sort(key=lambda c: (c["tiktok"]["verdict"] != "none", -c["score"]))
         picks = free[:5]
-        for c in found:  # keep the saved run small: a few example Shorts per checked channel
-            c["recent"] = c.get("recent", [])[:3] if c in candidates else []
+        for c in found:  # keep the saved run small: a few example videos per checked channel (5 long ones to cut)
+            c["recent"] = c.get("recent", [])[:5 if long else 3] if c in candidates else []
             c.pop("popular", None)
         run = {"market": market, "niche": name, "keywords": keywords, "at": time.strftime("%Y-%m-%d %H:%M"),
-               "found": len(found), "picks": [c["id"] for c in picks],
+               "found": len(found), "picks": [c["id"] for c in picks], "format": "long" if long else "shorts",
                "channels": checked + [c for c in found if c not in candidates][:20]}
         with r._lock:
-            r.cache.setdefault("runs", {})[market] = run
+            r.cache.setdefault("runs", {})[f"{market}/long" if long else market] = run
             r._save()
         summary = ", ".join(c["title"] + (" (only re-uploaded)" if c["tiktok"]["verdict"] == "reup" else "")
                             for c in picks) or "none"
         self._log("success" if picks else "warning", "research",
-                  f"{name} [{market}]: {len(picks)} promising channels not on TikTok", summary)
+                  f"{name} [{market}]: {len(picks)} promising {kind} channels not on TikTok", summary)
         self._emit("researchDone", kind="channels", run=run)
         self._notify("Research finished", f"{name}: {len(picks)} channels not on TikTok yet")
 
@@ -1272,7 +1274,7 @@ class Api:
         r = self._research()
         c = r.channel_by_url(url)
         r.check_tiktok([c])
-        c["recent"] = c.get("recent", [])[:3]
+        c["recent"] = c.get("recent", [])[:5 if c.get("format") == "long" else 3]
         c.pop("popular", None)
         self._emit("researchDone", kind="check", channel=c)
 

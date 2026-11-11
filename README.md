@@ -94,6 +94,8 @@ Finds promising YouTube Shorts channels in a hot niche that are **not on TikTok 
 
 ![Channel results with the TikTok accounts found and their evidence](docs/images/research-channels.jpg)
 
+**Long-video channels** (the switch next to the markets) looks for channels to cut with Smart cut instead: the niche's keywords are searched among 4–20 min and 20+ min videos of the last 90 days (no hashtag searches), and channels are kept with 2K–1M subscribers, ≥ 60 % long videos (any age), a long video in the last 60 days, in the market's language and about the niche. Each channel shows its ID and its 5 latest long videos (length, views, date) with a **Smart cut** button that opens the video in Smart cut. The TikTok check is the same, except that lengths are not compared and no frames are downloaded (a whole long video is too big): an account that re-uploads clips under new titles can go unnoticed. These runs are kept apart from the Shorts runs of the same market.
+
 If TikTok refuses searches (it asks to log in), channels with no account found are marked **Not verified** instead of *Not on TikTok* and are not suggested: log in to TikTok in the **Research** profile and run again. **Check on TikTok** runs step 3 for a single YouTube channel link. If TikTok shows a captcha, solve it in the Chrome window; the run waits.
 
 ## Editions and license activation
