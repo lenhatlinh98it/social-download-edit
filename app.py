@@ -78,7 +78,8 @@ WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10
 
 
 def normalize_shorts_url(url: str) -> str:
-    """Make sure the channel URL points to its /shorts tab."""
+    """Point the channel URL at its /shorts tab - or at its /videos tab (long videos, for Smart cut) when the link
+    names no /shorts tab."""
     url = url.strip().rstrip("/")
     if not url:
         return url
@@ -86,7 +87,8 @@ def normalize_shorts_url(url: str) -> str:
         url = "https://" + url
     url = re.sub(r"/(videos|streams|featured|playlists|community|about)$", "", url)
     if not url.endswith("/shorts"):
-        url += "/shorts"
+        channel = re.search(r"youtube\.com/(@[^/?#]+|channel/[\w-]+|c/[^/?#]+|user/[^/?#]+)$", url)
+        url += "/videos" if channel else "/shorts"
     return url
 
 
@@ -297,14 +299,15 @@ def fetch_youtube(url, _status):
         videos.append({
             "id": e["id"],
             "title": e.get("title") or e["id"],
-            "url": e.get("url") or f"https://www.youtube.com/shorts/{e['id']}",
+            "url": e.get("url") or (f"https://www.youtube.com/watch?v={e['id']}" if url.endswith("/videos")
+                                    else f"https://www.youtube.com/shorts/{e['id']}"),
             "views": compact_number(e.get("view_count")),
             "duration": e.get("duration"),  # the Shorts tab has neither: filled by Api._youtube_meta
             "uploaded": e.get("timestamp"),
             "thumb": thumbs[0]["url"] if thumbs else f"https://i.ytimg.com/vi/{e['id']}/hqdefault.jpg",
         })
     handle = re.search(r"/(@[^/?#]+)", url)
-    source = (info.get("channel") or info.get("uploader") or re.sub(r" - Shorts$", "", info.get("title") or "")
+    source = (info.get("channel") or info.get("uploader") or re.sub(r" - (Shorts|Videos)$", "", info.get("title") or "")
               or (handle.group(1) if handle else ""))
     return videos, source
 
@@ -660,7 +663,8 @@ class Api:
         if kind == "instagram":
             self._emit("igLogin", loggedIn=instagram.is_logged_in())
         self._emit("list", kind=kind, gen=self._gen[kind], url=url, videos=videos, hidden=hidden,
-                   source=source, folder=safe_name(source, fallback=kind), limited=limited)
+                   source=source, folder=safe_name(source, fallback=kind), limited=limited,
+                   long=kind == "youtube" and url.endswith("/videos"))
         if kind == "youtube" and load_settings().get("youtubeApiKey") and any(not v.get("uploaded") for v in videos):
             self._yt_api_gen = self._gen[kind]  # lazy per-card lookups are not needed for this list
             threading.Thread(target=self._youtube_meta, args=(self._gen[kind], videos), daemon=True).start()
@@ -1870,8 +1874,9 @@ class Api:
             self._emit("scLog", message=message)
 
         clips = []
+        link = "" if os.path.isfile(path) else path
         try:
-            if not os.path.isfile(path):  # a link: download it, then cut the file
+            if link:  # a link: download it, then cut the file
                 try:
                     path = self._smartcut_download(path, progress, log, cancel)
                 except (douyin.LoginRequired, yt_dlp.utils.DownloadError) as ex:
@@ -1955,6 +1960,11 @@ class Api:
         except (editor.Cancelled, smartcut.Cancelled):
             self._emit("scDone", clips=clips, cancelled=True)
             return
+        vid = re.search(r"\[([\w-]{11})\]", name)  # a downloaded YouTube video ends in " [id]"
+        if clips and vid and detect_kind(link) == "youtube":  # cut: hidden from the next fetch, like a downloaded Short
+            mark_downloaded("youtube", {"id": vid.group(1), "url": f"https://www.youtube.com/watch?v={vid.group(1)}",
+                                        "thumb": f"https://i.ytimg.com/vi/{vid.group(1)}/hqdefault.jpg"},
+                            video_title, path)
         self._log("success", "smartcut", f"{name}: {len(clips)} clip(s) made", os.path.dirname(clips[0]["path"]) if clips else "")
         self._emit("scDone", clips=clips, cancelled=False, folder=os.path.dirname(clips[0]["path"]) if clips else "")
         self._notify("Smart cut finished", f"{len(clips)} clips from {name}")
