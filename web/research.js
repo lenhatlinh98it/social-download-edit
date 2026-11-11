@@ -1,7 +1,7 @@
 "use strict";
 
 /* ---------- Research: hot niches -> promising Shorts channels -> not on TikTok yet ---------- */
-const rs = { market: "US", state: null, niches: [], run: null, check: null, running: false };
+const rs = { market: "US", format: "shorts", state: null, niches: [], run: null, check: null, running: false };
 const VERDICTS = {
   exists: { label: "On TikTok", cls: "bad" },
   likely: { label: "Likely on TikTok", cls: "bad" },
@@ -12,11 +12,12 @@ const VERDICTS = {
   error: { label: "Check failed", cls: "bad" },
 };
 const rsNum = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
+const rsDur = (s) => (s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "—");
 const short = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}K` : rsNum(n));
 
 async function loadResearch() {
   if (!api) return;
-  rs.state = await api.research_state(rs.market);
+  rs.state = await api.research_state(rs.market, rs.format);
   rs.niches = rs.state.niches;
   rs.run = rs.state.last;
   rs.running = rs.state.running;
@@ -28,6 +29,7 @@ function renderResearch() {
   const st = rs.state;
   if (!st) return;
   $$("#rsMarket button").forEach((b) => b.classList.toggle("on", b.dataset.m === rs.market));
+  $$("#rsFormat button").forEach((b) => b.classList.toggle("on", b.dataset.f === rs.format));
   $("#rsQuota").textContent = st.hasKey ? `API today: ${rsNum(st.quota)} / ${rsNum(st.quotaMax)}` : "Add API key";
   $("#rsQuota").classList.toggle("warn", !st.hasKey || st.quota > st.quotaMax * 0.8);
   if (!st.hasKey) $("#rsKeyBox").hidden = false;
@@ -62,7 +64,8 @@ function renderResearch() {
   if (rs.run) {
     const picks = rs.run.picks.map((id) => rs.run.channels.find((c) => c.id === id)).filter(Boolean);
     const others = rs.run.channels.filter((c) => !rs.run.picks.includes(c.id));
-    parts.push(`<h3 class="rs-h">${esc(rs.run.niche)} · ${esc(rs.run.market)} <span class="muted">— ${rs.run.found} promising Shorts channels found, ${esc(rs.run.at)}</span></h3>`);
+    const kind = rs.run.format === "long" ? "long-video" : "Shorts";
+    parts.push(`<h3 class="rs-h">${esc(rs.run.niche)} · ${esc(rs.run.market)} <span class="muted">— ${rs.run.found} promising ${kind} channels found, ${esc(rs.run.at)}</span></h3>`);
     const reups = picks.filter((c) => c.tiktok?.verdict === "reup").length;
     const pickTitle = reups ? `Top ${picks.length}: ${picks.length - reups} not on TikTok yet, ${reups} only re-uploaded by others` : `Top ${picks.length} not on TikTok yet`;
     const unverified = rs.run.channels.filter((c) => c.tiktok?.verdict === "unverified").length;
@@ -83,18 +86,27 @@ function channelCard(c, open, rank) {
   const v = t ? VERDICTS[t.verdict] || VERDICTS.error : { label: "Not checked", cls: "" };
   const age = c.ageDays ? `${Math.round(c.ageDays / 30)} mo old` : (c.created || "").slice(0, 10);
   const cands = t ? [...(t.candidates || []), ...(t.lookalikes || []).map((x) => ({ ...x, verdict: "lookalike" }))] : [];
+  const long = c.format === "long";
   return `<div class="rs-chan">
     <div class="rs-chan-head">
       ${rank ? `<span class="rs-rank">#${rank}</span>` : ""}
       <img src="${esc(c.avatar)}" referrerpolicy="no-referrer" alt="">
       <div class="rs-chan-info">
         <a href="#" class="rs-title" data-url="https://www.youtube.com/channel/${esc(c.id)}">${esc(c.title)}</a>
-        <div class="rs-stats mono">${esc(c.handle || "")} · ${age} · ${short(c.subs)} subs${c.shortsShare != null ? ` · ${Math.round(c.shortsShare * 100)}% Shorts` : ""}${
-          c.viewsPerDay != null ? ` · ${short(c.viewsPerDay)} views/day · avg ${short(c.avgRecentViews)}/Short · ${c.uploads30} uploads/30d` : ""}</div>
+        <div class="rs-stats mono">${esc(c.handle || "")} · ${age} · ${short(c.subs)} subs${long
+          ? (c.longShare != null ? ` · ${Math.round(c.longShare * 100)}% long videos` : "")
+          : (c.shortsShare != null ? ` · ${Math.round(c.shortsShare * 100)}% Shorts` : "")}${
+          c.viewsPerDay != null ? ` · ${short(c.viewsPerDay)} views/day · avg ${short(c.avgRecentViews)}/${long ? "video" : "Short"} · ${c.uploads30} uploads/30d` : ""}</div>
+        <div class="rs-stats mono">ID ${esc(c.id)}</div>
       </div>
       ${c.score != null ? `<span class="rs-score" title="Growth score">${c.score}</span>` : ""}
       <span class="rs-verdict ${v.cls}">${v.label}</span>
     </div>
+    ${long && c.recent?.length ? `<div class="rs-videos">${c.recent.map((v) => `<div class="rs-video">
+        <a href="#" data-url="https://www.youtube.com/watch?v=${esc(v.id)}" title="${esc(v.title)}">${esc(v.title)}</a>
+        <span class="muted mono">${rsDur(v.seconds)} · ${short(v.views)} views · ${esc((v.published || "").slice(0, 10))}</span>
+        <button class="btn ghost sm rs-cut" data-url="https://www.youtube.com/watch?v=${esc(v.id)}" title="Open this video in Smart cut">Smart cut</button>
+      </div>`).join("")}</div>` : ""}
     ${t?.error ? `<div class="tt-err">${esc(t.error)}</div>` : ""}
     ${cands.length ? `<details ${open && t.verdict !== "none" ? "open" : ""}><summary>TikTok accounts to verify (${cands.length})</summary>
       ${cands.map((x) => `<div class="rs-cand">
@@ -112,6 +124,13 @@ $("#rsMarket").addEventListener("click", (e) => {
   rs.check = null;
   loadResearch();
 });
+$("#rsFormat").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b || rs.running) return;
+  rs.format = b.dataset.f;
+  rs.check = null;
+  loadResearch();
+});
 $("#rsNichesBtn").addEventListener("click", async () => {
   const res = await api.research_niches(rs.market, 10);
   if (!res.ok) { toast("error", "Cannot research", res.error); return; }
@@ -120,7 +139,7 @@ $("#rsNichesBtn").addEventListener("click", async () => {
   renderResearch();
 });
 async function findChannels(niche) {
-  const res = await api.research_channels(rs.market, niche);
+  const res = await api.research_channels(rs.market, niche, rs.format);
   if (!res.ok) { toast("error", "Cannot research", res.error); return; }
   rs.running = true;
   rs.check = null;
@@ -176,6 +195,14 @@ $("#rsNiches").addEventListener("click", (e) => {
   if (pick) { findChannels(pick.closest(".rs-niche").dataset.id); return; }
 });
 $("#view-research").addEventListener("click", (e) => {
+  const cut = e.target.closest(".rs-cut");
+  if (cut) {  // a long video found here goes straight to Smart cut
+    setView("editor");
+    window.setEditorMode("smartcut");
+    $("#scUrl").value = cut.dataset.url;
+    scUseUrl();
+    return;
+  }
   const a = e.target.closest("a[data-url]");
   if (a) { e.preventDefault(); api.research_open(a.dataset.url); }
 });
@@ -196,7 +223,7 @@ Object.assign(handlers, {
     else if (e.error) toast("error", "Research failed", e.error, { label: "Open logs", run: () => setView("logs") });
     else if (e.kind === "niches") { rs.niches = e.niches; toast("success", "Niches scored", `Top 5 for ${e.market} are shown`); }
     else if (e.kind === "channels") {
-      rs.run = e.run;
+      if ((e.run.format || "shorts") === rs.format) rs.run = e.run;
       toast(e.run.picks.length ? "success" : "info", `${e.run.picks.length} channels not on TikTok yet`, `${e.run.niche} · ${e.run.market}`);
     } else if (e.kind === "check") {
       rs.check = e.channel;

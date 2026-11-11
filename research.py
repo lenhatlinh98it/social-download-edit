@@ -48,6 +48,10 @@ CHANNEL_MAX_AGE_DAYS = 1095  # promising channels: created in the last 36 months
 CHANNEL_MIN_SUBS, CHANNEL_MAX_SUBS = 2000, 1_000_000
 CHANNEL_MIN_SHORTS_SHARE = 0.6
 ACTIVE_DAYS = 45
+# long-video channels (for Smart cut): mostly long uploads, any age, a slower upload pace is fine
+LONG_MIN_SHARE = 0.6  # of the channel's uploads that are long videos (not Shorts)
+LONG_ACTIVE_DAYS = 60
+LONG_RECENT = 10  # latest long videos read per channel (5 are shown)
 HASHTAG_QUERIES = 3  # extra searches with the niche's most used hashtags
 # hashtags too generic to define a niche
 GENERIC_TAGS = set("shorts short ytshorts youtubeshorts shortsfeed shortvideo shortsvideo viral viralshorts viralvideo "
@@ -383,10 +387,11 @@ class YouTube:
                     raise
                 time.sleep(2)
 
-    def search_shorts(self, q, market, days, order="viewCount", max_results=50):
+    def search_shorts(self, q, market, days, order="viewCount", max_results=50, duration="short"):
+        """`duration`: "short" (< 4 min), "medium" (4-20 min) or "long" (> 20 min)."""
         m = MARKETS[market]
         after = (_now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        d = self.call("search", cost=100, part="snippet", type="video", videoDuration="short", order=order,
+        d = self.call("search", cost=100, part="snippet", type="video", videoDuration=duration, order=order,
                       regionCode=m["region"], relevanceLanguage=m["lang"], q=q, publishedAfter=after,
                       maxResults=max_results)
         return [it["id"]["videoId"] for it in d.get("items", []) if it.get("id", {}).get("videoId")]
@@ -553,18 +558,25 @@ class Research:
         return row
 
     # ---- 2. channels
-    def find_channels(self, market, keywords, topic_words=()):
+    def find_channels(self, market, keywords, topic_words=(), long=False):
         """`topic_words`: words that define a catalog niche (keywords + its name); channels must be mostly about them.
-        Without them (a niche the user typed) the keywords only count as whole phrases."""
+        Without them (a niche the user typed) the keywords only count as whole phrases.
+        `long`: channels that mostly upload long videos (to cut with Smart cut) instead of Shorts channels."""
+        kind = "long videos" if long else "Shorts"
         ids = []
         for i, q in enumerate(keywords):
             self._check_cancel()
-            self.progress("channels", f"Searching Shorts for “{q}”…", 0.05 + 0.05 * i)
-            ids += self.yt.search_shorts(q, market, CHANNEL_WINDOW_DAYS)
-            ids += self.yt.search_shorts(q, market, DISCOVERY_DAYS, order="relevance")
+            self.progress("channels", f"Searching {kind} for “{q}”…", 0.05 + 0.05 * i)
+            if long:  # long channels upload less often: look back further, 4-20 min and 20+ min videos
+                ids += self.yt.search_shorts(q, market, DISCOVERY_DAYS, duration="medium")
+                ids += self.yt.search_shorts(q, market, DISCOVERY_DAYS, duration="long")
+                ids += self.yt.search_shorts(q, market, DISCOVERY_DAYS, order="relevance", duration="long")
+            else:
+                ids += self.yt.search_shorts(q, market, CHANNEL_WINDOW_DAYS)
+                ids += self.yt.search_shorts(q, market, DISCOVERY_DAYS, order="relevance")
         vids = self.yt.videos(list(dict.fromkeys(ids)))
         niche_tags = niche_hashtags(vids, keywords)
-        tags = niche_tags[:HASHTAG_QUERIES]
+        tags = [] if long else niche_tags[:HASHTAG_QUERIES]  # long videos rarely carry hashtags: save the quota
         # the niche's own hashtags (#cardetailing) also define its topic: titles rarely repeat the typed keyword
         if topic_words:
             topic = topic_pattern([*keywords, *topic_words, *niche_tags[:6]])
@@ -583,23 +595,28 @@ class Research:
         named = self.yt.search_channels(keywords[0], market)
         chans = self.yt.channels([v["channelId"] for v in vids] + named)
         self.log("info", f"Searched {len(keywords)} keyword(s), hashtags {', '.join('#' + t for t in tags) or '—'} "
-                         f"and channel names: {len(vids)} Shorts, {len(chans)} channels")
+                         f"and channel names: {len(vids)} {kind}, {len(chans)} channels")
         now = _now()
         region, lang = MARKETS[market]["region"], MARKETS[market]["lang"]
-        stage1 = [c for c in chans.values() if (now - _parse_time(c["created"])).days <= CHANNEL_MAX_AGE_DAYS
+        stage1 = [c for c in chans.values() if (long or (now - _parse_time(c["created"])).days <= CHANNEL_MAX_AGE_DAYS)
                   and c["subs"] is not None and CHANNEL_MIN_SUBS <= c["subs"] <= CHANNEL_MAX_SUBS
                   and (not c["country"] or c["country"] == region)]
-        self.log("info", f"{len(stage1)} channels are ≤{CHANNEL_MAX_AGE_DAYS // 30} months old with "
-                         f"{CHANNEL_MIN_SUBS:,}-{CHANNEL_MAX_SUBS:,} subscribers and not registered in another country")
+        self.log("info", f"{len(stage1)} channels " + ("" if long else f"are ≤{CHANNEL_MAX_AGE_DAYS // 30} months old ")
+                 + f"with {CHANNEL_MIN_SUBS:,}-{CHANNEL_MAX_SUBS:,} subscribers and not registered in another country")
+        share_ok = (lambda c: c.get("longShare", 0) >= LONG_MIN_SHARE) if long else \
+            (lambda c: c.get("shortsShare", 0) >= CHANNEL_MIN_SHORTS_SHARE)
 
         def enrich(c):
             tail = c["id"][2:]
             shorts, longs = self.yt.playlist_total("UUSH" + tail), self.yt.playlist_total("UULF" + tail)
             c["shorts"], c["longs"] = shorts, longs
             c["shortsShare"] = round(shorts / (shorts + longs), 2) if shorts + longs else 0
-            if c["shortsShare"] < CHANNEL_MIN_SHORTS_SHARE:
+            if long:
+                c["format"] = "long"
+                c["longShare"] = round(longs / (shorts + longs), 2) if shorts + longs else 0
+            if not share_ok(c):
                 return c
-            recent = self.yt.videos(self.yt.playlist_ids("UUSH" + tail, 20))
+            recent = self.yt.videos(self.yt.playlist_ids(("UULF" if long else "UUSH") + tail, LONG_RECENT if long else 20))
             c["recent"] = recent
             if distinct_titles(recent) < MIN_DISTINCT_TITLES:
                 c["offMarket"] = "spam"
@@ -623,7 +640,7 @@ class Research:
             c["avgRecentViews"] = round(statistics.mean(v["views"] for v in recent)) if recent else 0
             c["uploads30"] = len(last30)
             c["lastUpload"] = recent[0]["published"][:10] if recent else ""
-            c["active"] = bool(recent) and (now - _parse_time(recent[0]["published"])).days <= ACTIVE_DAYS
+            c["active"] = bool(recent) and (now - _parse_time(recent[0]["published"])).days <= (LONG_ACTIVE_DAYS if long else ACTIVE_DAYS)
             c["score"] = round(math.log10(1 + c["viewsPerDay"]) * 10 + math.log10(1 + c["avgRecentViews"]) * 8
                                + min(c["uploads30"], 30) / 3 + math.log10(1 + c["subsPerDay"]) * 5, 1)
             return c
@@ -632,14 +649,15 @@ class Research:
         with ThreadPoolExecutor(max_workers=6) as pool:
             for i, c in enumerate(pool.map(enrich, stage1)):
                 self.progress("channels", f"Checking channels {i + 1}/{len(stage1)}", 0.3 + 0.2 * (i + 1) / max(len(stage1), 1))
-                if c.get("shortsShare", 0) >= CHANNEL_MIN_SHORTS_SHARE and c.get("active") and not c.get("offMarket"):
+                if share_ok(c) and c.get("active") and not c.get("offMarket"):
                     out.append(c)
         out.sort(key=lambda c: c["score"], reverse=True)
         off_lang = sum(1 for c in stage1 if c.get("offMarket") == "language")
         off_topic = sum(1 for c in stage1 if c.get("offMarket") == "topic")
         spam = sum(1 for c in stage1 if c.get("offMarket") == "spam")
-        self.log("info", f"{len(out)} promising Shorts channels (≥{int(CHANNEL_MIN_SHORTS_SHARE * 100)} % Shorts, "
-                         f"active in the last {ACTIVE_DAYS} days"
+        rule = (f"≥{int(LONG_MIN_SHARE * 100)} % long videos, active in the last {LONG_ACTIVE_DAYS} days" if long else
+                f"≥{int(CHANNEL_MIN_SHORTS_SHARE * 100)} % Shorts, active in the last {ACTIVE_DAYS} days")
+        self.log("info", f"{len(out)} promising {'long-video' if long else 'Shorts'} channels ({rule}"
                          f"; dropped {off_lang} not in the market's language or aimed at another market, "
                          f"{off_topic} mostly about other topics and {spam} reusing one title on most Shorts)")
         return out
@@ -657,7 +675,13 @@ class Research:
                 raise ResearchError("YouTube channel not found.")
             cid = d["items"][0]["id"]
         c = self.yt.channels([cid])[cid]
-        c["recent"] = self.yt.videos(self.yt.playlist_ids("UUSH" + cid[2:], 20) or self.yt.playlist_ids("UU" + cid[2:], 20))
+        tail = cid[2:]
+        shorts, longs = self.yt.playlist_total("UUSH" + tail), self.yt.playlist_total("UULF" + tail)
+        if longs > shorts:  # a long-video channel: checked against its long videos, not Shorts
+            c["format"], c["longShare"] = "long", round(longs / (shorts + longs), 2)
+            c["recent"] = self.yt.videos(self.yt.playlist_ids("UULF" + tail, LONG_RECENT))
+        else:
+            c["recent"] = self.yt.videos(self.yt.playlist_ids("UUSH" + tail, 20) or self.yt.playlist_ids("UU" + tail, 20))
         return c
 
     # ---- 3. TikTok check
@@ -683,7 +707,7 @@ class Research:
                     self._check_cancel()
                     self.progress("tiktok", f"TikTok check {i + 1}/{len(channels)}: {c['title']}", 0.5 + 0.5 * i / len(channels))
                     try:
-                        c.setdefault("popular", self.yt.popular_shorts(c["id"]))
+                        c.setdefault("popular", [] if c.get("format") == "long" else self.yt.popular_shorts(c["id"]))
                         c["tiktok"] = checker.check(c)
                     except Cancelled:
                         raise
@@ -707,6 +731,26 @@ class Research:
         return channels
 
 
+# the visible box titled "Log in to TikTok" (any language) and the centre of the small button in its top right corner
+LOGIN_POPUP_X_JS = """() => {
+  const title = [...document.querySelectorAll('h1, h2, div, span')].find((e) => {
+    const t = (e.childElementCount ? '' : e.textContent || '').trim();
+    return t.length < 40 && /log in to tiktok|tiktokにログイン|登录 ?tiktok|tiktok에 로그인|đăng nhập vào tiktok/i.test(t)
+      && e.getBoundingClientRect().width > 0;
+  });
+  if (!title) return null;
+  for (let box = title.parentElement, up = 0; box && up < 8; box = box.parentElement, up++) {
+    const r = box.getBoundingClientRect();
+    if (r.width < 300 || r.width > window.innerWidth * 0.9) continue;  // the popup card, not the whole page
+    const close = [...box.querySelectorAll('button, [role="button"], div, span')].map((e) => [e, e.getBoundingClientRect()])
+      .filter(([e, b]) => b.width >= 16 && b.width <= 56 && b.height >= 16 && b.height <= 56 && e.querySelector('svg')
+        && b.right >= r.right - 70 && b.top <= r.top + 70)
+      .sort((a, b) => a[1].width * a[1].height - b[1].width * b[1].height)[0];
+    if (close) return { x: close[1].left + close[1].width / 2, y: close[1].top + close[1].height / 2 };
+  }
+  return null;
+}"""
+
 VERDICT_ORDER = {"exists": 0, "likely": 1, "suspect": 2, "reup": 3, "unverified": 4, "none": 5, "error": 6}
 
 
@@ -720,6 +764,7 @@ class _TikTokChecker:
         self._hashes = {}
         self._tmp = tempfile.mkdtemp(prefix="grabber-research-")
         self._yt_frame_cache = {}
+        self.long = False  # checking a long-video channel: no lengths or frames to compare
         self.search_blocked = {}  # search endpoint -> TikTok's refusal ("2483 log in first")
         self.searches = 0
         self._search_cache = {}
@@ -746,6 +791,7 @@ class _TikTokChecker:
             return False  # e.g. HTTP 404 for a handle that does not exist
         self.page.wait_for_timeout(settle)
         self._wait_captcha()
+        self._close_login_popup()  # a guest gets the log in popup over pages now and then
         return True
 
     def _wait_captcha(self):
@@ -812,12 +858,8 @@ class _TikTokChecker:
     def _handle_variants(self, c):
         h = (c.get("handle") or "").lstrip("@").lower()
         h = re.sub(r"-[a-z0-9]{3}$", "", h)  # auto handles like @acperformance-h4p
-        out = []
-        if h:
-            out += [h, h.replace("-", "_"), re.sub(r"[-_.]", "", h)]
-            base = re.sub(r"\d+$", "", h)  # @yuu_meshi_recipe15 -> yuu_meshi_recipe, often yuu_meshi_recipe_ on TikTok
-            if base != h:
-                out += [base, base + "_"]
+        # only the exact handle is opened directly: changed spellings are found by searching the handle (see check)
+        out = [h] if h else []
         raw = unicodedata.normalize("NFKC", c.get("title") or "").casefold().strip()
         if re.fullmatch(r"[a-z0-9_.]{3,24}", raw):  # a title that is itself a handle: ena_kazokugohan
             out.append(raw)
@@ -871,6 +913,7 @@ class _TikTokChecker:
                         self.page.wait_for_timeout(800)
                         box = self.page.locator('[data-e2e="search-user-input"]:visible').first
                 box.fill(q, timeout=10000)
+                self._close_login_popup()  # it can pop up while the query is typed and swallow the Enter
                 self.api.clear()
                 with self.page.expect_response(lambda r: "/api/search/general/full" in r.url, timeout=30000):
                     box.press("Enter")
@@ -878,6 +921,7 @@ class _TikTokChecker:
                 self._wait_captcha()
                 break
             except PlaywrightError as ex:  # TimeoutError is a PlaywrightError too; a login popup may cover the box
+                self._close_login_popup()
                 if attempt:
                     self.search_blocked["general"] = f"search box failed: {str(ex).splitlines()[0][:80]}"
                     return res
@@ -923,6 +967,12 @@ class _TikTokChecker:
             if close.count():
                 close.first.click(timeout=5000)
                 self.page.wait_for_timeout(600)
+                return
+            # the "Log in to TikTok" box whatever its markup: click the round X at its top right corner
+            spot = self.page.evaluate(LOGIN_POPUP_X_JS)
+            if spot:
+                self.page.mouse.click(spot["x"], spot["y"])
+                self.page.wait_for_timeout(600)
             elif self.page.locator('[role="dialog"]:visible').count():
                 self.page.keyboard.press("Escape")
                 self.page.wait_for_timeout(600)
@@ -939,7 +989,8 @@ class _TikTokChecker:
         """How a TikTok video matches a YouTube Short: "cover" (near-same length and the same cover frame: a copy),
         "title" (the same title, about the same length: re-uploads trim a few seconds, but short titles such as a
         dish name are shared by many creators, so it needs the frames to confirm) or None."""
-        gap = abs(yt_video["seconds"] - secs)
+        # a clip cut from a long video is much shorter than it: the lengths only count for Shorts
+        gap = 0 if self.long else abs(yt_video["seconds"] - secs)
         if gap <= 8 and hamming(self._hash_url(cover_url, via_page=True), yt_thumb) <= COVER_MATCH:
             return "cover"
         if gap <= 12 and similarity(clean_title(yt_video["title"]), clean_title(desc)) >= 0.6:
@@ -972,6 +1023,8 @@ class _TikTokChecker:
 
     def _profile_frame_matches(self, refs, n_tiktok=4, n_youtube=6):
         """How many of the opened profile's latest videos show footage of the channel's Shorts (most viewed first)."""
+        if self.long:  # downloading whole long videos to compare frames would take far too long
+            return 0
         yt = [h for yv in sorted(refs, key=lambda v: v["views"], reverse=True)[:n_youtube] for h in self._yt_frames(yv)]
         if not yt:
             return 0
@@ -1039,7 +1092,7 @@ class _TikTokChecker:
             elif "title" in levels:
                 titles += 1
         if matches:
-            ev.append(f"{matches} recent video(s) are copies of this channel's Shorts")
+            ev.append(f"{matches} recent video(s) are copies of this channel's {'long videos' if self.long else 'Shorts'}")
             score += min(matches, 5) * 15
         return {"handle": u["handle"], "url": f"https://www.tiktok.com/@{u['handle']}", "nickname": u["nickname"],
                 "followers": u["followers"], "videos": u["videos"], "nameSim": round(name_sim, 2), "nickSim": round(nick_sim, 2), "avatarDistance": av,
@@ -1047,6 +1100,7 @@ class _TikTokChecker:
 
     def check(self, c):
         self.search_blocked = {}
+        self.long = c.get("format") == "long"
         found_links = self._links_from_youtube(c)
         yt_avatar = self._hash_url(c.get("avatar"))
         # the latest Shorts plus the most viewed ones of all time: re-uploaders copy the hits, often months later
@@ -1067,14 +1121,14 @@ class _TikTokChecker:
         for h in self._handle_variants(c):
             add(h, "same handle as YouTube")
 
-        # search by the channel name and by its YouTube handle (a Japanese handle like @えなごはん is what people search)
-        names = [c["title"]]
-        short_title = re.sub(r"[【\[(（].*?[】\])）]", "", c["title"]).strip()
-        if short_title and short_title != c["title"]:
-            names.append(short_title)
+        # search by the YouTube handle first, then the channel name: typed into TikTok's search box (without the @),
+        # the handle also finds accounts that changed a few characters (adventureviper2 -> adventure_viper), which
+        # opening tiktok.com/@<guess> misses; a Japanese handle like @えなごはん is also what people search
         yt_handle = re.sub(r"-[a-z0-9]{3}$", "", (c.get("handle") or "").lstrip("@"))
-        if yt_handle and norm_name(yt_handle) not in {norm_name(n) for n in names}:
-            names.append(yt_handle)
+        names = [yt_handle] if yt_handle else []
+        for n in (c["title"], re.sub(r"[【\[(（].*?[】\])）]", "", c["title"]).strip()):
+            if n and norm_name(n) not in {norm_name(x) for x in names}:
+                names.append(n)
         seen_users = set()
         same_name = 0
         for q in names[:3]:
@@ -1103,7 +1157,7 @@ class _TikTokChecker:
         popular = [v for v in c.get("popular", []) if v["id"] in thumb_of]
         latest = sorted(c.get("recent", [])[:20], key=lambda v: v["views"], reverse=True)
         searched = list({v["id"]: v for v in [*popular, *latest]}.values())[:TITLE_SEARCHES]
-        frame_checks = FRAME_CHECKS
+        frame_checks = 0 if self.long else FRAME_CHECKS
         for yv in searched:
             th = thumb_of[yv["id"]]
             q = clean_title(yv["title"])
@@ -1127,9 +1181,10 @@ class _TikTokChecker:
                 elif rank < 5 and yv["seconds"] >= 20 and gap <= 8:
                     possible.setdefault(hit["handle"].lower(), []).append(link)
         for h in reposts:
-            add(h, "posted a copy of a Short")
+            add(h, "posted a copy of a long video" if self.long else "posted a copy of a Short")
         for h in list(possible)[:4]:
-            add(h, "possible copy (top result for a Short's title, same length)")
+            add(h, "possible copy (same title as a long video)" if self.long else
+                "possible copy (top result for a Short's title, same length)")
 
         results = []
         frame_checks = PROFILE_FRAME_CHECKS
@@ -1157,12 +1212,14 @@ class _TikTokChecker:
                     info["score"] += 30 * n
             if h in reposts:
                 info["videoMatches"] = max(info["videoMatches"], len(reposts[h]))
-                info["evidence"].append(f"found by video search: {len(reposts[h])} copied Short(s)")
+                info["evidence"].append(f"found by video search: {len(reposts[h])} copied "
+                                        + ("long video(s)" if self.long else "Short(s)"))
                 info["examples"] = reposts[h][:3]
                 info["score"] += 15 * len(reposts[h])
             elif h in possible:
                 info["possibleCopies"] = len(possible[h])
-                info["evidence"].append(f"possible copy: top result for a Short's title with the same length ({len(possible[h])})")
+                info["evidence"].append(f"possible copy: same title as a long video ({len(possible[h])})" if self.long else
+                                        f"possible copy: top result for a Short's title with the same length ({len(possible[h])})")
                 info["examples"] = possible[h][:3]
             results.append(info)
 

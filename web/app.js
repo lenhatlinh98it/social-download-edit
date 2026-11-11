@@ -25,7 +25,7 @@ const ICONS = {
 
 const SOURCES = {
   youtube: {
-    placeholder: "Paste a YouTube channel URL — e.g. https://www.youtube.com/@channel/shorts",
+    placeholder: "Paste a YouTube channel URL — …/@channel/shorts for Shorts, …/@channel for long videos (Smart cut)",
     emptyTitle: "Grab YouTube Shorts",
     emptySub: "Paste a channel link above and hit Fetch. All Shorts of the channel will show up here.",
   },
@@ -309,6 +309,8 @@ function syncDisabled() {
   $("#dlBtn").classList.toggle("hidden", state.downloading);
   $("#markBtn").disabled = $("#dlBtn").disabled;
   $("#markBtn").classList.toggle("hidden", state.downloading);
+  $("#scBtn").classList.toggle("hidden", state.downloading || state.view !== "youtube" || !L?.long);
+  $("#scBtn").disabled = state.busy || !L || L.selected.size !== 1;
   $("#cancelBtn").classList.toggle("hidden", !state.downloading);
 }
 
@@ -1092,6 +1094,7 @@ const handlers = {
     L.selected = new Set();
     L.hidden = e.hidden || 0;
     L.folder = e.folder || "";
+    L.long = !!e.long;
     $(`#view-${e.kind} .url`).value = e.url;
     renderGrid(e.kind);
     renderDir();
@@ -1191,6 +1194,15 @@ $("#folderBtn").addEventListener("click", chooseDir);
 $("#openDirBtn").addEventListener("click", () => api.open_folder($("#dirText").textContent || state.dir));
 $("#dlBtn").addEventListener("click", download);
 $("#markBtn").addEventListener("click", markDownloaded);
+$("#scBtn").addEventListener("click", () => {  // a long video of the Videos tab goes to Smart cut
+  const L = state.lists.youtube;
+  const v = L.videos[[...L.selected][0]];
+  if (!v) return;
+  setView("editor");
+  window.setEditorMode("smartcut");
+  $("#scUrl").value = v.url;
+  scUseUrl();
+});
 $("#cancelBtn").addEventListener("click", () => { $("#cancelBtn").disabled = true; api.cancel_download(); });
 $("#engineBtn").addEventListener("click", engineClick);
 window.addEventListener("resize", movePill);

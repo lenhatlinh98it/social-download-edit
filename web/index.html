@@ -156,6 +156,10 @@
             <button data-m="JP">JP</button>
             <button data-m="KR">KR</button>
           </div>
+          <div class="seg" id="rsFormat" title="Shorts channels to repost as they are, or long-video channels to cut with Smart cut">
+            <button class="on" data-f="shorts">Shorts channels</button>
+            <button data-f="long">Long-video channels</button>
+          </div>
           <button class="btn primary sm" id="rsNichesBtn">Research niches</button>
           <div class="rs-input">
             <input id="rsNiche" list="rsNicheList" placeholder="…or pick / type a niche" spellcheck="false">
@@ -707,6 +711,10 @@
       <button class="btn ghost lg" id="markBtn" title="Already have these videos? Add them to the downloaded list so they are hidden from now on">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.8 2.8L16.5 9.5"/></svg>
         <span class="btn-label">Add to downloaded</span>
+      </button>
+      <button class="btn ghost lg hidden" id="scBtn" title="Cut the selected long video into vertical clips with Smart cut">
+        <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>
+        Smart cut
       </button>
       <button class="btn primary lg" id="dlBtn">
         <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>

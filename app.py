@@ -78,7 +78,8 @@ WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10
 
 
 def normalize_shorts_url(url: str) -> str:
-    """Make sure the channel URL points to its /shorts tab."""
+    """Point the channel URL at its /shorts tab - or at its /videos tab (long videos, for Smart cut) when the link
+    names no /shorts tab."""
     url = url.strip().rstrip("/")
     if not url:
         return url
@@ -86,7 +87,8 @@ def normalize_shorts_url(url: str) -> str:
         url = "https://" + url
     url = re.sub(r"/(videos|streams|featured|playlists|community|about)$", "", url)
     if not url.endswith("/shorts"):
-        url += "/shorts"
+        channel = re.search(r"youtube\.com/(@[^/?#]+|channel/[\w-]+|c/[^/?#]+|user/[^/?#]+)$", url)
+        url += "/videos" if channel else "/shorts"
     return url
 
 
@@ -297,14 +299,15 @@ def fetch_youtube(url, _status):
         videos.append({
             "id": e["id"],
             "title": e.get("title") or e["id"],
-            "url": e.get("url") or f"https://www.youtube.com/shorts/{e['id']}",
+            "url": e.get("url") or (f"https://www.youtube.com/watch?v={e['id']}" if url.endswith("/videos")
+                                    else f"https://www.youtube.com/shorts/{e['id']}"),
             "views": compact_number(e.get("view_count")),
             "duration": e.get("duration"),  # the Shorts tab has neither: filled by Api._youtube_meta
             "uploaded": e.get("timestamp"),
             "thumb": thumbs[0]["url"] if thumbs else f"https://i.ytimg.com/vi/{e['id']}/hqdefault.jpg",
         })
     handle = re.search(r"/(@[^/?#]+)", url)
-    source = (info.get("channel") or info.get("uploader") or re.sub(r" - Shorts$", "", info.get("title") or "")
+    source = (info.get("channel") or info.get("uploader") or re.sub(r" - (Shorts|Videos)$", "", info.get("title") or "")
               or (handle.group(1) if handle else ""))
     return videos, source
 
@@ -660,7 +663,8 @@ class Api:
         if kind == "instagram":
             self._emit("igLogin", loggedIn=instagram.is_logged_in())
         self._emit("list", kind=kind, gen=self._gen[kind], url=url, videos=videos, hidden=hidden,
-                   source=source, folder=safe_name(source, fallback=kind), limited=limited)
+                   source=source, folder=safe_name(source, fallback=kind), limited=limited,
+                   long=kind == "youtube" and url.endswith("/videos"))
         if kind == "youtube" and load_settings().get("youtubeApiKey") and any(not v.get("uploaded") for v in videos):
             self._yt_api_gen = self._gen[kind]  # lazy per-card lookups are not needed for this list
             threading.Thread(target=self._youtube_meta, args=(self._gen[kind], videos), daemon=True).start()
@@ -1128,13 +1132,13 @@ class Api:
         return research.Research(key, facebook.DATA_DIR, self._tools()[0], load_settings().get("ttChromeRoot") or "",
                                  log, progress, self._research_cancel.is_set)
 
-    def research_state(self, market="US"):
+    def research_state(self, market="US", fmt="shorts"):
         if not research:
             return {"ok": False, "error": "Not available in this edition."}
         try:
             r = self._research()
             has_key, quota, niches = True, r.quota(), r.niche_results(market)
-            last = (r.cache.get("runs") or {}).get(market)
+            last = (r.cache.get("runs") or {}).get(market if fmt != "long" else f"{market}/long")
         except research.ResearchError:
             has_key, quota, niches, last = False, 0, [], None
         lang = research.MARKETS.get(market, research.MARKETS["US"])["lang"]
@@ -1217,8 +1221,9 @@ class Api:
         rows = r.research_niches(market, count)
         self._emit("researchDone", kind="niches", market=market, niches=rows)
 
-    def research_channels(self, market, niche):
-        """`niche`: a catalog id or a free-text keyword typed by the user."""
+    def research_channels(self, market, niche, fmt="shorts"):
+        """`niche`: a catalog id or a free-text keyword typed by the user; `fmt`: "shorts" channels or "long"-video
+        channels (to cut with Smart cut)."""
         if not research:
             return {"ok": False, "error": "Not available in this edition."}
         niche = (niche or "").strip()
@@ -1226,9 +1231,9 @@ class Api:
             return {"ok": False, "error": "Choose a market and a niche."}
         if not load_settings().get("ttChromeRoot"):
             return {"ok": False, "error": "Choose your Chrome Portable folder in the TikTok tab first (the TikTok check runs in its 'Research' profile)."}
-        return self._start_research("channels", self._research_channels_task, market, niche)
+        return self._start_research("channels", self._research_channels_task, market, niche, fmt == "long")
 
-    def _research_channels_task(self, market, niche):
+    def _research_channels_task(self, market, niche, long=False):
         r = self._research()
         lang = research.MARKETS[market]["lang"]
         typed = niche.casefold()
@@ -1236,8 +1241,9 @@ class Api:
             (n for n in research.NICHES if typed == n[1].casefold() or any(typed == k.casefold() for ks in n[2].values() for k in ks)), None)
         name, keywords = (entry[1], entry[2][lang][:2]) if entry else (niche, [niche])
         topic_words = [name, *keywords, *entry[2]["en"]] if entry else []
-        self._log("info", "research", f"Finding Shorts channels for “{name}” in {market}", ", ".join(keywords))
-        found = r.find_channels(market, keywords, topic_words)
+        kind = "long-video" if long else "Shorts"
+        self._log("info", "research", f"Finding {kind} channels for “{name}” in {market}", ", ".join(keywords))
+        found = r.find_channels(market, keywords, topic_words, long=long)
         candidates = found[:25]
         if candidates:
             r.check_tiktok(candidates, stop_after=5)
@@ -1245,19 +1251,19 @@ class Api:
         free = [c for c in checked if c["tiktok"]["verdict"] in ("none", "reup")]
         free.sort(key=lambda c: (c["tiktok"]["verdict"] != "none", -c["score"]))
         picks = free[:5]
-        for c in found:  # keep the saved run small: a few example Shorts per checked channel
-            c["recent"] = c.get("recent", [])[:3] if c in candidates else []
+        for c in found:  # keep the saved run small: a few example videos per checked channel (5 long ones to cut)
+            c["recent"] = c.get("recent", [])[:5 if long else 3] if c in candidates else []
             c.pop("popular", None)
         run = {"market": market, "niche": name, "keywords": keywords, "at": time.strftime("%Y-%m-%d %H:%M"),
-               "found": len(found), "picks": [c["id"] for c in picks],
+               "found": len(found), "picks": [c["id"] for c in picks], "format": "long" if long else "shorts",
                "channels": checked + [c for c in found if c not in candidates][:20]}
         with r._lock:
-            r.cache.setdefault("runs", {})[market] = run
+            r.cache.setdefault("runs", {})[f"{market}/long" if long else market] = run
             r._save()
         summary = ", ".join(c["title"] + (" (only re-uploaded)" if c["tiktok"]["verdict"] == "reup" else "")
                             for c in picks) or "none"
         self._log("success" if picks else "warning", "research",
-                  f"{name} [{market}]: {len(picks)} promising channels not on TikTok", summary)
+                  f"{name} [{market}]: {len(picks)} promising {kind} channels not on TikTok", summary)
         self._emit("researchDone", kind="channels", run=run)
         self._notify("Research finished", f"{name}: {len(picks)} channels not on TikTok yet")
 
@@ -1272,7 +1278,7 @@ class Api:
         r = self._research()
         c = r.channel_by_url(url)
         r.check_tiktok([c])
-        c["recent"] = c.get("recent", [])[:3]
+        c["recent"] = c.get("recent", [])[:5 if c.get("format") == "long" else 3]
         c.pop("popular", None)
         self._emit("researchDone", kind="check", channel=c)
 
@@ -1868,8 +1874,9 @@ class Api:
             self._emit("scLog", message=message)
 
         clips = []
+        link = "" if os.path.isfile(path) else path
         try:
-            if not os.path.isfile(path):  # a link: download it, then cut the file
+            if link:  # a link: download it, then cut the file
                 try:
                     path = self._smartcut_download(path, progress, log, cancel)
                 except (douyin.LoginRequired, yt_dlp.utils.DownloadError) as ex:
@@ -1953,6 +1960,11 @@ class Api:
         except (editor.Cancelled, smartcut.Cancelled):
             self._emit("scDone", clips=clips, cancelled=True)
             return
+        vid = re.search(r"\[([\w-]{11})\]", name)  # a downloaded YouTube video ends in " [id]"
+        if clips and vid and detect_kind(link) == "youtube":  # cut: hidden from the next fetch, like a downloaded Short
+            mark_downloaded("youtube", {"id": vid.group(1), "url": f"https://www.youtube.com/watch?v={vid.group(1)}",
+                                        "thumb": f"https://i.ytimg.com/vi/{vid.group(1)}/hqdefault.jpg"},
+                            video_title, path)
         self._log("success", "smartcut", f"{name}: {len(clips)} clip(s) made", os.path.dirname(clips[0]["path"]) if clips else "")
         self._emit("scDone", clips=clips, cancelled=False, folder=os.path.dirname(clips[0]["path"]) if clips else "")
         self._notify("Smart cut finished", f"{len(clips)} clips from {name}")

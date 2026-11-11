@@ -207,6 +207,7 @@ Object.assign(handlers, {
     $("#scStatus").textContent = e.cancelled ? `Cancelled · ${e.clips.length} clip(s) made` : `${e.clips.length} clip(s) made`;
     renderSc();
     if (!e.cancelled) {
+      loadHistory();  // a cut YouTube video is now in Downloaded (hidden from the next fetch)
       toast("success", `Smart cut: ${e.clips.length} clips`, "Open them all in the Editor, or post them straight to TikTok.",
         { label: "Open in Editor", run: () => $("#scEdit").click() });
     }
