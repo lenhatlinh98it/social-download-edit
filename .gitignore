@@ -31,3 +31,5 @@ Desktop.ini
 *.mkv
 *.mov
 downloads/
+
+.playwright-mcp/
