@@ -28,8 +28,10 @@ const ed = {
   fadeIn: 0,
   fadeOut: 0,
   music: null, // {path, name, duration, url, volume, offset, loop}
-  text: null, // see defaultText()
-  logo: null, // {path, name, url, size, opacity, x, y}
+  texts: [], // see defaultText(); drawn over the images
+  images: [], // {path, name, url, size, opacity, x, y}, bottom to top
+  textSel: 0, // the text / image the side panel edits
+  imageSel: 0,
   start: 0,
   end: 0,
   exporting: false,
@@ -44,12 +46,13 @@ const RATIOS = { "9:16": 9 / 16, "16:9": 16 / 9, "1:1": 1, "4:5": 4 / 5, "4:3": 
 const MIN_CROP = 32;
 const POS_STEPS = [0.03, 0.5, 0.97];
 const HIST_KEYS = ["rotate", "flipH", "flipV", "ratio", "crop", "zoom", "panX", "panY", "bg", "bgColor", "zoomAnimate",
-  "zoomEnd", "zoomEase", "color", "speed", "volume", "mute", "fadeIn", "fadeOut", "music", "text", "logo", "start", "end"];
+  "zoomEnd", "zoomEase", "color", "speed", "volume", "mute", "fadeIn", "fadeOut", "music", "texts", "images", "start", "end"];
 let fontList = [];
 const fontFamilies = {}; // font file path -> loaded CSS family
 let defaultFontPath = "";
-let logoImg = null;
-const overlayBoxes = { text: null, logo: null }; // hit boxes on the output canvas (css px)
+const imageCache = {}; // url -> loaded <img>
+let overlayHits = []; // [{kind, i, box}] on the output canvas (css px), bottom to top
+let layerFocus = "text"; // which kind of layer was edited last (its outline is shown)
 
 function defaultText() {
   return { content: "", font: defaultFontPath, size: 6, color: "#ffffff", opacity: 1, outline: 0, outlineColor: "#000000",
@@ -257,14 +260,14 @@ function render() {
 /* ---------- text & logo overlays ---------- */
 const measureCtx = document.createElement("canvas").getContext("2d");
 
-function fontCss(px) {
-  const fam = fontFamilies[ed.text?.font];
+function fontCss(px, font) {
+  const fam = fontFamilies[font];
   return `${px}px ${fam ? `"${fam}"` : "Arial, sans-serif"}`;
 }
 
 /* word-wrap so every line fits 92% of the frame width (drawtext doesn't wrap); CJK text without spaces wraps per char */
-function wrapLines(content, fs, maxW) {
-  measureCtx.font = fontCss(fs);
+function wrapLines(content, fs, maxW, font) {
+  measureCtx.font = fontCss(fs, font);
   const fits = (str) => measureCtx.measureText(str).width <= maxW;
   const lines = [];
   for (const para of content.replace(/\r/g, "").split("\n")) {
@@ -284,12 +287,11 @@ function wrapLines(content, fs, maxW) {
 }
 
 /* layout in output pixels, mirrors drawtext: fontsize = h * size%, line_spacing = 15% fs, box border = 35% fs */
-function textLayout(ow, oh) {
-  const t = ed.text;
+function textLayout(t, ow, oh) {
   if (!t || !t.content.trim()) return null;
   const fs = Math.max(8, Math.round(oh * t.size / 100));
-  const lines = wrapLines(t.content.trim(), fs, ow * 0.92);
-  measureCtx.font = fontCss(fs);
+  const lines = wrapLines(t.content.trim(), fs, ow * 0.92, t.font);
+  measureCtx.font = fontCss(fs, t.font);
   const m = measureCtx.measureText("Hgy");
   const ascent = m.fontBoundingBoxAscent ?? fs * 0.9;
   const natural = ascent + (m.fontBoundingBoxDescent ?? fs * 0.25);
@@ -302,10 +304,23 @@ function textLayout(ow, oh) {
 
 function drawOverlays(ctx, cw, ch, ow, oh) {
   const k = cw / ow;
-  overlayBoxes.text = overlayBoxes.logo = null;
-  const L = textLayout(ow, oh);
-  if (L) {
-    const t = ed.text;
+  overlayHits = [];
+  ed.images.forEach((g, i) => {
+    const img = layerImage(g.url);
+    if (!img.complete || !img.naturalWidth) return;
+    const lw = Math.max(2, Math.round(ow * g.size / 200) * 2);
+    const lh = lw * img.naturalHeight / img.naturalWidth;
+    const x0 = (ow - lw) * g.x;
+    const y0 = (oh - lh) * g.y;
+    ctx.save();
+    ctx.globalAlpha = g.opacity;
+    ctx.drawImage(img, x0 * k, y0 * k, lw * k, lh * k);
+    ctx.restore();
+    overlayHits.push({ kind: "image", i, box: { x: x0 * k, y: y0 * k, w: lw * k, h: lh * k, freeW: (ow - lw) * k, freeH: (oh - lh) * k } });
+  });
+  ed.texts.forEach((t, i) => {
+    const L = textLayout(t, ow, oh);
+    if (!L) return;
     const x0 = (ow - L.tw) * t.x;
     const y0 = (oh - L.th) * t.y;
     ctx.save();
@@ -316,7 +331,7 @@ function drawOverlays(ctx, cw, ch, ow, oh) {
       ctx.fillRect(x0 - L.pad, y0 - L.pad, L.tw + 2 * L.pad, L.th + 2 * L.pad);
     }
     ctx.globalAlpha = t.opacity;
-    ctx.font = fontCss(L.fs);
+    ctx.font = fontCss(L.fs, t.font);
     ctx.textBaseline = "alphabetic";
     L.lines.forEach((line, i) => {
       const y = y0 + i * (L.natural + L.spacing) + L.ascent;
@@ -330,20 +345,17 @@ function drawOverlays(ctx, cw, ch, ow, oh) {
       ctx.fillText(line, x0, y);
     });
     ctx.restore();
-    overlayBoxes.text = { x: (x0 - L.pad) * k, y: (y0 - L.pad) * k, w: (L.tw + 2 * L.pad) * k, h: (L.th + 2 * L.pad) * k,
-      freeW: (ow - L.tw) * k, freeH: (oh - L.th) * k };
-  }
-  const g = ed.logo;
-  if (g && logoImg?.complete && logoImg.naturalWidth) {
-    const lw = Math.max(2, Math.round(ow * g.size / 200) * 2);
-    const lh = lw * logoImg.naturalHeight / logoImg.naturalWidth;
-    const x0 = (ow - lw) * g.x;
-    const y0 = (oh - lh) * g.y;
+    overlayHits.push({ kind: "text", i, box: { x: (x0 - L.pad) * k, y: (y0 - L.pad) * k, w: (L.tw + 2 * L.pad) * k,
+      h: (L.th + 2 * L.pad) * k, freeW: (ow - L.tw) * k, freeH: (oh - L.th) * k } });
+  });
+  // the layer being edited gets a dashed outline
+  const sel = overlayHits.find((h) => (h.kind === "text" ? h.i === ed.textSel && layerFocus === "text" : h.i === ed.imageSel && layerFocus === "image"));
+  if (sel && video.paused && ed.texts.length + ed.images.length > 1) {
     ctx.save();
-    ctx.globalAlpha = g.opacity;
-    ctx.drawImage(logoImg, x0 * k, y0 * k, lw * k, lh * k);
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = "rgba(255,255,255,0.8)";
+    ctx.strokeRect(sel.box.x, sel.box.y, sel.box.w, sel.box.h);
     ctx.restore();
-    overlayBoxes.logo = { x: x0 * k, y: y0 * k, w: lw * k, h: lh * k, freeW: (ow - lw) * k, freeH: (oh - lh) * k };
   }
 }
 
@@ -474,7 +486,9 @@ function syncPanel() {
     $("#musicLoop").checked = m.loop;
     musicEl.volume = Math.min(m.volume, 1);
   }
-  const t = ed.text || defaultText();
+  const t = ed.texts[ed.textSel] || defaultText();
+  layerTabs($("#txtTabs"), ed.texts.length, ed.textSel, "Text");
+  $("#txtRemove").disabled = !ed.texts[ed.textSel];
   if (document.activeElement !== $("#txtContent")) $("#txtContent").value = t.content;
   if (t.font && $("#txtFont").value !== t.font) $("#txtFont").value = t.font;
   $("#txtSize").value = t.size;
@@ -490,9 +504,10 @@ function syncPanel() {
   $("#txtBoxOpacity").value = Math.round(t.boxOpacity * 100);
   $("#txtBoxOpacityVal").textContent = `${Math.round(t.boxOpacity * 100)}%`;
   $("#txtBoxRow").classList.toggle("disabled", !t.box);
-  const g = ed.logo;
+  const g = ed.images[ed.imageSel];
+  layerTabs($("#imgTabs"), ed.images.length, ed.imageSel, "Image");
   $("#logoBox").classList.toggle("on", !!g);
-  $("#logoName").textContent = g ? g.name : "No logo";
+  $("#logoName").textContent = g ? g.name : "No image";
   if (g) {
     $("#logoSize").value = g.size;
     $("#logoSizeVal").textContent = `${g.size}%`;
@@ -521,11 +536,18 @@ function syncPanel() {
   kick();
 }
 
+/* "Text 1  Text 2" tabs choosing which text / image the panel edits */
+function layerTabs(el, n, sel, what) {
+  el.hidden = n < 2;
+  el.innerHTML = Array.from({ length: n }, (_, i) =>
+    `<button data-i="${i}" class="${i === sel ? "on" : ""}">${what} ${i + 1}</button>`).join("");
+}
+
 function resetEdits() {
   Object.assign(ed, { rotate: 0, flipH: false, flipV: false, ratio: "original", zoom: 1, panX: 0.5, panY: 0.5,
     bg: "blur", zoomAnimate: false, zoomEnd: 1.3, zoomEase: true, color: {}, speed: 1, volume: 1, mute: false,
-    fadeIn: 0, fadeOut: 0, music: null, text: null, logo: null, start: 0, end: ed.info ? ed.info.duration : 0 });
-  logoImg = null;
+    fadeIn: 0, fadeOut: 0, music: null, texts: [], images: [], textSel: 0, imageSel: 0, start: 0,
+    end: ed.info ? ed.info.duration : 0 });
   musicEl.pause();
   musicEl.removeAttribute("src");
   if (ed.info) fitCrop(ratioValue());
@@ -606,9 +628,42 @@ $("#mute").addEventListener("change", (e) => { ed.mute = e.target.checked; syncP
 
 /* text overlay */
 function setText(patch) {
-  ed.text = { ...(ed.text || defaultText()), ...patch };
+  const texts = [...ed.texts];
+  if (!texts[ed.textSel]) ed.textSel = texts.push(defaultText()) - 1;
+  texts[ed.textSel] = { ...texts[ed.textSel], ...patch };
+  ed.texts = texts;
+  layerFocus = "text";
   syncPanel();
 }
+function setImage(patch) {
+  if (!ed.images[ed.imageSel]) return;
+  ed.images = ed.images.map((g, i) => (i === ed.imageSel ? { ...g, ...patch } : g));
+  layerFocus = "image";
+  syncPanel();
+}
+$("#txtAdd").addEventListener("click", () => {
+  const cur = ed.texts[ed.textSel];
+  // a new text starts with the look of the current one, a bit higher so the two don't overlap
+  const t = cur ? { ...cur, content: "", y: Math.max(0, cur.y - 0.15) } : defaultText();
+  ed.textSel = ed.texts.length;
+  ed.texts = [...ed.texts, t];
+  layerFocus = "text";
+  syncPanel();
+  $("#txtContent").focus();
+});
+$("#txtRemove").addEventListener("click", () => {
+  ed.texts = ed.texts.filter((_, i) => i !== ed.textSel);
+  ed.textSel = Math.max(0, Math.min(ed.textSel, ed.texts.length - 1));
+  syncPanel();
+});
+$("#txtTabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-i]");
+  if (b) { ed.textSel = Number(b.dataset.i); layerFocus = "text"; syncPanel(); }
+});
+$("#imgTabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-i]");
+  if (b) { ed.imageSel = Number(b.dataset.i); layerFocus = "image"; syncPanel(); }
+});
 $("#txtContent").addEventListener("input", (e) => setText({ content: e.target.value }));
 $("#txtFont").addEventListener("change", async (e) => { setText({ font: e.target.value }); await ensureFont(e.target.value); });
 $("#txtSize").addEventListener("input", (e) => setText({ size: Number(e.target.value) }));
@@ -626,35 +681,42 @@ for (const grid of $$(".pos-grid")) {
     if (!b) return;
     const pos = { x: Number(b.dataset.x), y: Number(b.dataset.y) };
     if (grid.dataset.target === "text") setText(pos);
-    else if (ed.logo) { ed.logo = { ...ed.logo, ...pos }; syncPanel(); }
+    else setImage(pos);
   });
 }
 
-/* logo overlay */
-async function setLogo(path) {
+/* image overlays: a logo, banners, a background for the top / bottom */
+async function addImage(path, place) {
   const res = await api.editor_pick_logo(path || null);
   if (!res.ok) {
-    if (!res.cancelled) toast("error", "Can't add logo", res.error);
-    return;
+    if (!res.cancelled) toast("error", "Can't add image", res.error);
+    return null;
   }
-  ed.logo = { path: res.path, name: res.name, url: res.url, size: ed.logo?.size || 20, opacity: ed.logo?.opacity ?? 1,
-    x: ed.logo?.x ?? 0.97, y: ed.logo?.y ?? 0.03 };
-  loadLogoImage();
+  const g = { path: res.path, name: res.name, url: res.url, size: 40, opacity: 1, x: 0.5, y: 0.5, ...place };
+  ed.imageSel = ed.images.length;
+  ed.images = [...ed.images, g];
+  layerFocus = "image";
   syncPanel();
+  return g;
 }
-function loadLogoImage() {
-  if (!ed.logo) { logoImg = null; return; }
-  if (logoImg?.dataset?.src === ed.logo.url) return;
-  logoImg = new Image();
-  logoImg.dataset.src = ed.logo.url;
-  logoImg.crossOrigin = "anonymous";
-  logoImg.onload = kick;
-  logoImg.src = ed.logo.url;
+function layerImage(url) {
+  if (!imageCache[url]) {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = kick;
+    img.src = url;
+    imageCache[url] = img;
+  }
+  return imageCache[url];
 }
-$("#logoAdd").addEventListener("click", () => setLogo());
-$("#logoRemove").addEventListener("click", () => { ed.logo = null; logoImg = null; syncPanel(); });
-$("#logoSize").addEventListener("input", (e) => { ed.logo = { ...ed.logo, size: Number(e.target.value) }; syncPanel(); });
-$("#logoOpacity").addEventListener("input", (e) => { ed.logo = { ...ed.logo, opacity: Number(e.target.value) / 100 }; syncPanel(); });
+$("#logoAdd").addEventListener("click", () => addImage());
+$("#logoRemove").addEventListener("click", () => {
+  ed.images = ed.images.filter((_, i) => i !== ed.imageSel);
+  ed.imageSel = Math.max(0, Math.min(ed.imageSel, ed.images.length - 1));
+  syncPanel();
+});
+$("#logoSize").addEventListener("input", (e) => setImage({ size: Number(e.target.value) }));
+$("#logoOpacity").addEventListener("input", (e) => setImage({ opacity: Number(e.target.value) / 100 }));
 
 /* background music */
 async function setMusic(path) {
@@ -743,22 +805,25 @@ function hit(box, x, y) {
 
 outCanvas.addEventListener("pointerdown", (e) => {
   if (!ed.loaded) return;
-  const which = hit(overlayBoxes.text, e.offsetX, e.offsetY) ? "text" : hit(overlayBoxes.logo, e.offsetX, e.offsetY) ? "logo" : null;
-  if (which) {
+  const top = [...overlayHits].reverse().find((h) => hit(h.box, e.offsetX, e.offsetY));
+  if (top) {
+    const list = top.kind === "text" ? "texts" : "images";
+    if (top.kind === "text") ed.textSel = top.i; else ed.imageSel = top.i;
+    layerFocus = top.kind;
+    syncPanel();
     e.preventDefault();
     outCanvas.setPointerCapture(e.pointerId);
     let lx = e.clientX;
     let ly = e.clientY;
     const move = (ev) => {
-      const box = overlayBoxes[which];
-      const o = which === "text" ? ed.text : ed.logo;
+      const box = overlayHits.find((h) => h.kind === top.kind && h.i === top.i)?.box;
+      const o = ed[list][top.i];
       if (!box || !o) return;
       const nx = box.freeW > 1 ? Math.min(Math.max(o.x + (ev.clientX - lx) / box.freeW, 0), 1) : o.x;
       const ny = box.freeH > 1 ? Math.min(Math.max(o.y + (ev.clientY - ly) / box.freeH, 0), 1) : o.y;
       lx = ev.clientX;
       ly = ev.clientY;
-      if (which === "text") ed.text = { ...ed.text, x: nx, y: ny };
-      else ed.logo = { ...ed.logo, x: nx, y: ny };
+      ed[list] = ed[list].map((it, i) => (i === top.i ? { ...it, x: nx, y: ny } : it));
       kick();
     };
     const up = () => {
@@ -1042,7 +1107,7 @@ function defaultSnapshot(item) {
   return withItem({ ...item, snap: null }, () => {
     Object.assign(ed, { rotate: 0, flipH: false, flipV: false, ratio: "original", zoom: 1, panX: 0.5, panY: 0.5,
       bg: "blur", zoomAnimate: false, zoomEnd: 1.3, zoomEase: true, color: {}, speed: 1, volume: 1, mute: false,
-      fadeIn: 0, fadeOut: 0, music: null, text: null, logo: null, start: 0, end: item.info.duration });
+      fadeIn: 0, fadeOut: 0, music: null, texts: [], images: [], start: 0, end: item.info.duration });
     fitCrop(ratioValue());
     return snapshot();
   });
@@ -1099,7 +1164,7 @@ $("#eqApplyAll").addEventListener("click", async () => {
   if (!ed.loaded || edq.items.length < 2) return;
   saveQueueItem();
   const preset = makePreset();
-  const keep = { music: ed.music, logo: ed.logo, bgColor: ed.bgColor };
+  const keep = { music: ed.music, images: ed.images, bgColor: ed.bgColor };
   let n = 0;
   for (const [i, item] of edq.items.entries()) {
     if (i === edq.index) continue;
@@ -1115,8 +1180,8 @@ $("#eqApplyAll").addEventListener("click", async () => {
       color: { ...(sp.color || {}) }, speed: sp.speed ?? 1, volume: sp.volume ?? 1, mute: !!sp.mute,
       fadeIn: sp.fadeIn || 0, fadeOut: sp.fadeOut || 0,
       music: keep.music ? { ...keep.music } : null,
-      text: ed.text ? { ...ed.text } : null,
-      logo: keep.logo ? { ...keep.logo } : null,
+      texts: ed.texts.map((t) => ({ ...t })),
+      images: keep.images.map((g) => ({ ...g })),
       start: own.start, end: own.end,
     };
     item.base = item.base || defaultSnapshot(item);
@@ -1172,20 +1237,18 @@ function editSpec() {
     color: { ...ed.color },
     speed: ed.speed, volume: ed.volume, mute: ed.mute, fadeIn: ed.fadeIn, fadeOut: ed.fadeOut,
     music: ed.music ? { path: ed.music.path, volume: ed.music.volume, offset: ed.music.offset, loop: ed.music.loop } : null,
-    text: textSpec(),
-    logo: ed.logo ? { path: ed.logo.path, size: ed.logo.size, opacity: ed.logo.opacity, x: ed.logo.x, y: ed.logo.y } : null,
+    texts: textsSpec(),
+    images: ed.images.map((g) => ({ path: g.path, size: g.size, opacity: g.opacity, x: g.x, y: g.y })),
     start: ed.start, end: ed.end,
     stripMetadata: $("#edStrip").checked,
   };
 }
 
-/* text as ffmpeg should draw it: already wrapped to the output width */
-function textSpec() {
-  const t = ed.text;
-  if (!t || !t.content.trim() || !t.font) return null;
+/* texts as ffmpeg should draw them: already wrapped to the output width */
+function textsSpec() {
   const [ow, oh] = outputSize();
-  const L = textLayout(ow, oh);
-  return { ...t, content: L.lines.join("\n"), raw: t.content };
+  return ed.texts.filter((t) => t.content.trim() && t.font)
+    .map((t) => ({ ...t, content: textLayout(t, ow, oh).lines.join("\n"), raw: t.content }));
 }
 
 /* ---------- undo / redo ---------- */
@@ -1220,8 +1283,9 @@ function restoreSnapshot(snap) {
     if (ed.music) musicEl.src = ed.music.url;
     else { musicEl.pause(); musicEl.removeAttribute("src"); }
   }
-  loadLogoImage();
-  if (ed.text?.font) ensureFont(ed.text.font);
+  ed.textSel = Math.min(ed.textSel, Math.max(0, ed.texts.length - 1));
+  ed.imageSel = Math.min(ed.imageSel, Math.max(0, ed.images.length - 1));
+  ed.texts.forEach((t) => ensureFont(t.font));
   syncPanel();
   syncMusic(true);
   editHistory.restoring = false;
@@ -1300,7 +1364,7 @@ function makePreset() {
     background: ed.bg === "color" ? ed.bgColor : ed.bg, color: { ...ed.color },
     speed: ed.speed, volume: ed.volume, mute: ed.mute, fadeIn: ed.fadeIn, fadeOut: ed.fadeOut,
     music: ed.music ? { path: ed.music.path, volume: ed.music.volume, offset: ed.music.offset, loop: ed.music.loop } : null,
-    text: textSpec(), logo: editSpec().logo, stripMetadata: $("#edStrip").checked,
+    texts: textsSpec(), images: editSpec().images, stripMetadata: $("#edStrip").checked,
   };
 }
 
@@ -1315,7 +1379,8 @@ async function applyPreset(preset) {
     zoomEase: sp.zoomEase ?? true, bg: bg.startsWith("#") ? "color" : bg, bgColor: bg.startsWith("#") ? bg : ed.bgColor,
     color: { ...(sp.color || {}) }, speed: sp.speed ?? 1, volume: sp.volume ?? 1, mute: !!sp.mute,
     fadeIn: sp.fadeIn || 0, fadeOut: sp.fadeOut || 0,
-    text: sp.text ? { ...defaultText(), ...sp.text, content: sp.text.raw ?? sp.text.content } : null,
+    texts: (sp.texts || (sp.text ? [sp.text] : [])).map((t) => ({ ...defaultText(), ...t, content: t.raw ?? t.content })),
+    images: [], textSel: 0, imageSel: 0,
   });
   $("#edStrip").checked = sp.stripMetadata ?? true;
   ed.music = null;
@@ -1325,12 +1390,11 @@ async function applyPreset(preset) {
     await setMusic(sp.music.path);
     if (ed.music) Object.assign(ed.music, { volume: sp.music.volume ?? 1, offset: sp.music.offset || 0, loop: sp.music.loop ?? true });
   }
-  ed.logo = null;
-  if (sp.logo?.path) {
-    await setLogo(sp.logo.path);
-    if (ed.logo) Object.assign(ed.logo, { size: sp.logo.size, opacity: sp.logo.opacity, x: sp.logo.x, y: sp.logo.y });
+  for (const g of sp.images || (sp.logo ? [sp.logo] : [])) {
+    if (g.path) await addImage(g.path, { size: g.size, opacity: g.opacity, x: g.x, y: g.y });
   }
-  if (ed.text?.font) await ensureFont(ed.text.font);
+  ed.imageSel = 0;
+  for (const t of ed.texts) await ensureFont(t.font);
   syncPanel();
   syncMusic(true);
 }
@@ -1363,9 +1427,9 @@ $("#presetDelete").addEventListener("click", (e) => {
 handlers.filesDropped = async (e) => {
   const videos = e.files.filter((f) => f.kind === "video");
   const audio = e.files.find((f) => f.kind === "audio");
-  const image = e.files.find((f) => f.kind === "image");
+  const images = e.files.filter((f) => f.kind === "image");
   if (state.view !== "editor") {
-    if (!videos.length) return toast("info", "Open the Editor first", "Music and logo files can be dropped while editing a video.");
+    if (!videos.length) return toast("info", "Open the Editor first", "Music and image files can be dropped while editing a video.");
     setView("editor");
   }
   const mode = $("#view-editor").dataset.mode;
@@ -1374,7 +1438,7 @@ handlers.filesDropped = async (e) => {
   if (mode === "smartcut") return videos.length && window.scSetSource?.(videos[0].path);
   if (videos.length) await openQueue(videos.map((f) => f.path));
   if (audio && ed.loaded) await setMusic(audio.path);
-  if (image && ed.loaded) await setLogo(image.path);
+  if (ed.loaded) for (const f of images) await addImage(f.path);
 };
 
 function setEdStatus(text, value) {

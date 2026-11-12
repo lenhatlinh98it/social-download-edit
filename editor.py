@@ -13,9 +13,10 @@ Edit spec (all coordinates in the *rotated* frame, i.e. after rotation is applie
       "color": {brightness, contrast, saturation, temperature, tint, gamma, fade, vignette, sharpen},  # -100..100
       "speed": 0.25..4, "volume": 0..2, "mute": bool, "fadeIn": s, "fadeOut": s,   # mute = original audio only
       "music": {"path", "volume": 0..2, "offset": s, "loop": bool},   # background music, cut to the output length
-      "text": {"content", "font": file, "size": % of height, "color", "opacity", "outline", "outlineColor",
-               "box": bool, "boxColor", "boxOpacity", "x": 0..1, "y": 0..1},
-      "logo": {"path", "size": % of width, "opacity", "x": 0..1, "y": 0..1},
+      "texts": [{"content", "font": file, "size": % of height, "color", "opacity", "outline", "outlineColor",
+                 "box": bool, "boxColor", "boxOpacity", "x": 0..1, "y": 0..1}],   # drawn over the images
+      "images": [{"path", "size": % of width, "opacity", "x": 0..1, "y": 0..1}],   # in order, bottom to top
+      (older specs have one "text" / "logo" instead)
       "stripMetadata": bool,
     }
 """
@@ -274,8 +275,17 @@ def _rgba(hex_color, opacity):
     return f"0x{color[1:]}@{min(max(float(opacity), 0), 1):.3f}"
 
 
-def build_graph(info, spec, length, lut_name=None, pix_fmt="yuv420p", text_files=None, logo_index=None):
-    """Full filter graph: geometry -> color -> text/logo -> speed -> fades -> pixel format (+ audio).
+def spec_texts(spec):
+    return spec.get("texts") or ([spec["text"]] if spec.get("text") else [])
+
+
+def spec_images(spec):
+    return spec.get("images") or ([spec["logo"]] if spec.get("logo") else [])
+
+
+def build_graph(info, spec, length, lut_name=None, pix_fmt="yuv420p", text_files=None, image_inputs=None):
+    """Full filter graph: geometry -> color -> images -> texts -> speed -> fades -> pixel format (+ audio).
+    `text_files`: [(text, {"font", "text"})]; `image_inputs`: [(input index, image)].
     Returns (graph, vlabel, alabel, size, out_len)."""
     graph, vlabel, (ow, oh) = build_geometry(info, spec, length)
     color = spec.get("color") or {}
@@ -293,11 +303,19 @@ def build_graph(info, spec, length, lut_name=None, pix_fmt="yuv420p", text_files
     vignette = float(color.get("vignette") or 0) / 100
     if vignette > 0:
         look.append(f"vignette=angle={0.15 + 0.7 * vignette:.4f}")
-    text = spec.get("text") or {}
-    if text_files and (text.get("content") or "").strip():
+    if look:
+        graph += f";{vlabel}{','.join(look)}[vlook]"
+        vlabel = "[vlook]"
+    for n, (index, img) in enumerate(image_inputs or []):
+        lw = _even(ow * float(img.get("size") or 20) / 100)
+        graph += (f";[{index}:v]scale={lw}:-2,format=rgba,colorchannelmixer=aa={float(img.get('opacity', 1)):.3f}[img{n}];"
+                  f"{vlabel}[img{n}]overlay=x=(W-w)*{float(img.get('x', 0.95)):.4f}:y=(H-h)*{float(img.get('y', 0.05)):.4f}[vimg{n}]")
+        vlabel = f"[vimg{n}]"
+    drawn = []
+    for text, files in text_files or []:
         fs = max(8, round(oh * float(text.get("size") or 6) / 100))
         op = float(text.get("opacity", 1))
-        dt = [f"fontfile={text_files['font']}", f"textfile={text_files['text']}", "expansion=none",
+        dt = [f"fontfile={files['font']}", f"textfile={files['text']}", "expansion=none",
               f"fontsize={fs}", f"fontcolor={_rgba(text.get('color'), op)}", "line_spacing=" + str(round(fs * 0.15)),
               f"x=(w-text_w)*{float(text.get('x', 0.5)):.4f}", f"y=(h-text_h)*{float(text.get('y', 0.9)):.4f}"]
         outline = float(text.get("outline") or 0)
@@ -306,16 +324,10 @@ def build_graph(info, spec, length, lut_name=None, pix_fmt="yuv420p", text_files
         if text.get("box"):
             dt += ["box=1", f"boxcolor={_rgba(text.get('boxColor'), float(text.get('boxOpacity', 0.5)) * op)}",
                    f"boxborderw={round(fs * 0.35)}"]
-        look.append("drawtext=" + ":".join(dt))
-    if look:
-        graph += f";{vlabel}{','.join(look)}[vlook]"
-        vlabel = "[vlook]"
-    logo = spec.get("logo") or {}
-    if logo_index is not None and logo.get("path"):
-        lw = _even(ow * float(logo.get("size") or 20) / 100)
-        graph += (f";[{logo_index}:v]scale={lw}:-2,format=rgba,colorchannelmixer=aa={float(logo.get('opacity', 1)):.3f}[logo];"
-                  f"{vlabel}[logo]overlay=x=(W-w)*{float(logo.get('x', 0.95)):.4f}:y=(H-h)*{float(logo.get('y', 0.05)):.4f}[vlogo]")
-        vlabel = "[vlogo]"
+        drawn.append("drawtext=" + ":".join(dt))
+    if drawn:
+        graph += f";{vlabel}{','.join(drawn)}[vtext]"
+        vlabel = "[vtext]"
 
     timing = []
     if abs(speed - 1) > 1e-3:
@@ -403,15 +415,16 @@ def export(ffmpeg, src, dst, info, spec, on_progress=None, should_cancel=None):
         if any(float((spec.get("color") or {}).get(k) or 0) for k in LUT_KEYS):
             lut_name = "grade.cube"
             write_lut(os.path.join(workdir, lut_name), spec.get("color"))
-        text_files = None
-        text = spec.get("text") or {}
-        if (text.get("content") or "").strip() and text.get("font") and os.path.isfile(text["font"]):
-            font_name = "font" + os.path.splitext(text["font"])[1].lower()
+        text_files = []
+        for n, text in enumerate(spec_texts(spec)):
+            if not ((text.get("content") or "").strip() and text.get("font") and os.path.isfile(text["font"])):
+                continue
+            font_name = f"font{n}" + os.path.splitext(text["font"])[1].lower()
             shutil.copyfile(text["font"], os.path.join(workdir, font_name))
             # newline="\n": a CRLF would be drawn as two line breaks
-            with open(os.path.join(workdir, "text.txt"), "w", encoding="utf-8", newline="\n") as f:
+            with open(os.path.join(workdir, f"text{n}.txt"), "w", encoding="utf-8", newline="\n") as f:
                 f.write(text["content"].replace("\r", "").strip())
-            text_files = {"font": font_name, "text": "text.txt"}
+            text_files.append((text, {"font": font_name, "text": f"text{n}.txt"}))
 
         cmd = [ffmpeg, "-hide_banner", "-v", "error", "-y", "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", src]
         music = spec.get("music") or {}
@@ -419,15 +432,15 @@ def export(ffmpeg, src, dst, info, spec, on_progress=None, should_cancel=None):
             if music.get("loop", True):
                 cmd += ["-stream_loop", "-1"]
             cmd += ["-ss", f"{max(float(music.get('offset') or 0), 0):.3f}", "-i", music["path"]]
-        logo_index = None
-        logo = spec.get("logo") or {}
-        if logo.get("path") and os.path.isfile(logo["path"]):
-            logo_index = 2 if music.get("path") else 1
-            cmd += ["-i", logo["path"]]
+        image_inputs = []
+        for img in spec_images(spec):
+            if img.get("path") and os.path.isfile(img["path"]):
+                image_inputs.append(((2 if music.get("path") else 1) + len(image_inputs), img))
+                cmd += ["-i", img["path"]]
 
         geo_size = build_geometry(info, spec, length)[2]
         label, enc_args, pix = _encoder_args(ffmpeg, *geo_size, info["fps"])
-        graph, vlabel, alabel, (ow, oh), out_len = build_graph(info, spec, length, lut_name, pix, text_files, logo_index)
+        graph, vlabel, alabel, (ow, oh), out_len = build_graph(info, spec, length, lut_name, pix, text_files, image_inputs)
         cmd += ["-filter_complex", graph, "-map", vlabel, *enc_args]
         cmd += ["-map", alabel, "-c:a", "aac", "-b:a", "192k"] if alabel else ["-an"]
         cmd += [*(STRIP_ARGS if spec.get("stripMetadata", True) else ["-map_metadata", "0"]),
@@ -441,7 +454,8 @@ def export(ffmpeg, src, dst, info, spec, on_progress=None, should_cancel=None):
 # ---------- presets (an edit saved independently of one video) ----------
 RATIO_VALUES = {"9:16": 9 / 16, "16:9": 16 / 9, "1:1": 1.0, "4:5": 4 / 5, "4:3": 4 / 3, "3:4": 3 / 4}
 PRESET_KEYS = ("rotate", "flipH", "flipV", "zoom", "panX", "panY", "zoomAnimate", "zoomEnd", "zoomEase", "background",
-               "color", "speed", "volume", "mute", "fadeIn", "fadeOut", "music", "text", "logo", "stripMetadata")
+               "color", "speed", "volume", "mute", "fadeIn", "fadeOut", "music", "text", "logo", "texts", "images",
+               "stripMetadata")
 
 
 def resolve_preset(preset, info):
