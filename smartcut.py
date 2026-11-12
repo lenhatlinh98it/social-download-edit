@@ -2,9 +2,11 @@
 
 1. transcribe the speech with faster-whisper (GPU when CUDA is available, else CPU)
 2. pick the moments: a local LLM served by Ollama reads the transcript, or heuristics (speech, loudness, scene cuts)
-3. reframe: YuNet face detection drives a smoothed 9:16 crop window (centre crop when nobody is on screen)
+3. reframe: YuNet face detection drives a smoothed 9:16 crop window (centre crop when nobody is on screen), or
+   optical flow does ("follow action": hands at work, a car being washed, someone walking)
 4. render each clip with ffmpeg (optional burned-in captions from the word timestamps)
 """
+import base64
 import glob
 import hashlib
 import json
@@ -651,6 +653,188 @@ def track_faces(src, start, end, yunet_path, should_cancel, bars=None):
     finally:
         cap.release()
     return out
+
+
+VISION_MODEL = "qwen2.5vl:3b"
+MIN_FRAMING = 1.5  # seconds: the framing never changes faster than this
+_canvas_w = {}  # model -> the width of the canvas its box coordinates are given in
+
+
+def _ollama_vision(model, prompt, jpg):
+    body = json.dumps({"model": model, "stream": False, "options": {"temperature": 0},
+                       "messages": [{"role": "user", "content": prompt,
+                                     "images": [base64.b64encode(jpg).decode("ascii")]}]}).encode("utf-8")
+    req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        return json.load(r)["message"]["content"]
+
+
+def _boxes(reply):
+    m = re.search(r"\[\s*\{.*\}\s*\]|\{.*\}", reply, re.S)
+    j = json.loads(m.group(0)) if m else []
+    return [b["bbox_2d"] for b in (j if isinstance(j, list) else [j])
+            if isinstance(b, dict) and len(b.get("bbox_2d") or []) == 4]
+
+
+def _vision_box(src, t, model, bars, log, near=0.5):
+    """(left, right, name, picture) of what the hands are working on in the frame at `t` (left / right in 0..1),
+    asked in two short steps (name it, then box it) - a small model does both well but not the two at once. Of
+    several boxes (a pile of logs and the one being split), the one nearest `near` (where the movement is). None
+    when the model can't tell."""
+    import cv2
+    import numpy as np
+    try:
+        if model not in _canvas_w:  # box coordinates come in the model's own canvas: measure it on a known square
+            cal = np.full((360, 640, 3), 200, np.uint8)
+            cv2.rectangle(cal, (440, 230), (520, 300), (255, 0, 0), -1)
+            b = (_boxes(_ollama_vision(model, "Output the bounding box coordinates of the blue square in JSON format.",
+                                       cv2.imencode(".jpg", cal)[1].tobytes())) or [None])[0]
+            _canvas_w[model] = (b[2] - b[0]) / 80 * 640 if b and b[2] > b[0] else None
+        canvas = _canvas_w[model]
+        if not canvas:
+            return None
+        cap = cv2.VideoCapture(src)
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ok, frame = cap.read()
+        cap.release()
+        if not ok:
+            return None
+        if bars:
+            bw, bh, bx, by = bars
+            frame = frame[by:by + bh, bx:bx + bw]
+        h, w = frame.shape[:2]
+        small = cv2.resize(frame, (672, max(2, int(h * 672 / w))))
+        jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+        thing = _ollama_vision(model, "What object are the person's hands or tools working on in this picture? If nobody "
+                                      "is working, name the main subject. Answer with a short noun phrase that tells it "
+                                      "apart from similar things in the picture, e.g. 'the onion being cut', 'the log on "
+                                      "the stump', 'the burger on the board'.", jpg).strip().strip(".").splitlines()[0][:60]
+        found = [(b[0] / canvas, min(b[2] / canvas, 1.0)) for b in _boxes(_ollama_vision(
+            model, f"Output the bounding box coordinates of {thing} in JSON format.", jpg)) if 0 <= b[0] < b[2] <= canvas * 1.02]
+        if not found:
+            return None
+        lo, hi = min(found, key=lambda lr: abs((lr[0] + lr[1]) / 2 - near))
+        return lo, hi, thing, small
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return None
+
+
+def action_path(src, start, end, crop_frac, cuts, should_cancel, bars=None, vision_model=None, log=None):
+    """Crop centre keyframes [(t, x)] that never pan: one still framing per shot, centred on where the work
+    happens over the whole shot (the plate being filled, the log being split). Movement is optical flow minus
+    the camera's own pan / shake, counted more away from the borders (hands, tools, the board) than near them
+    (arms, bodies and legs coming into the picture). A long shot whose action moves elsewhere for good gets a new framing (a cut,
+    not a pan). `cuts`: scene cuts relative to `start`."""
+    import cv2
+    import numpy as np
+    cap = cv2.VideoCapture(src)
+    if not cap.isOpened():
+        return [(0.0, 0.5)]
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000)
+    every = max(1, round(fps * TRACK_STEP))
+    n, prev, inner, samples, shot_starts = 0, None, None, [], [0.0]
+    try:
+        while True:
+            if not cap.grab():
+                break
+            t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+            if t > end:
+                break
+            n += 1
+            if (n - 1) % every:
+                continue
+            if should_cancel():
+                raise Cancelled()
+            ok, frame = cap.retrieve()
+            if not ok:
+                continue
+            if bars:
+                bw, bh, bx, by = bars
+                frame = frame[by:by + bh, bx:bx + bw]
+            h, w = frame.shape[:2]
+            gray = cv2.cvtColor(cv2.resize(frame, (320, max(2, int(h * 320 / w)))), cv2.COLOR_BGR2GRAY)
+            rel = max(0.0, t - start)
+            if prev is not None and prev.shape == gray.shape:
+                if cv2.absdiff(prev, gray).mean() > 40 and rel - shot_starts[-1] > 0.5:
+                    shot_starts.append(rel)  # a cut the scene scan missed
+                else:
+                    flow = cv2.calcOpticalFlowFarneback(prev, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+                    own = flow - np.median(flow.reshape(-1, 2), axis=0)  # remove the camera's own movement
+                    mag = np.linalg.norm(own, axis=2)
+                    mag[mag < 1.0] = 0  # noise, compression flicker
+                    if inner is None or inner.shape != mag.shape:
+                        # arms, bodies and legs come in from the edges; the hands, tools and the thing being
+                        # worked on are further in: movement counts more the further it is from the border
+                        hh, ww = mag.shape
+                        yy, xx = np.mgrid[0:hh, 0:ww]
+                        inner = np.clip(np.minimum.reduce([yy, hh - 1 - yy, xx, ww - 1 - xx]) / (0.3 * hh), 0.05, 1) ** 2
+                    samples.append((rel, (mag * inner).sum(axis=0)))
+            prev = gray
+    finally:
+        cap.release()
+    if not samples:
+        return [(0.0, 0.5)]
+    size = samples[0][1].size
+    win = max(1, int(round(crop_frac * size)))
+    pos = np.linspace(-1, 1, size)
+    prior = 1 - 0.6 * pos ** 2  # the subject is usually framed near the middle; smoke and leaves stir at the edges
+
+    def centre(cols):
+        cols = cols * prior
+        total = cols.sum()
+        if total <= 0 or win >= size:
+            return 0.5, 0.0
+        sums = np.convolve(cols, np.ones(win), "valid")
+        best = int(sums.argmax())
+        share = sums[best] / total
+        # a clear centre of action, or else the middle
+        return ((best + win / 2) / size if share > min(0.95, crop_frac * 1.4) else 0.5), share
+
+    bounds = [0.0]
+    for c in sorted({*shot_starts, *(c for c in cuts if 0 < c < end - start)}):
+        if c - bounds[-1] >= MIN_FRAMING:  # quick cuts (a hand sweeping over a close-up) keep the framing
+            bounds.append(c)
+    bounds.append(float("inf"))
+    keys = []
+    for a, b in zip(bounds, bounds[1:]):
+        shot = [(t, c) for t, c in samples if a <= t < b]
+        if not shot:
+            continue
+        # split a long shot where the action settles elsewhere for 3 s or more
+        segs, cur = [], [shot[0]]
+        for i in range(1, len(shot)):
+            cur.append(shot[i])
+            ahead = shot[i + 1:i + 1 + int(3 / TRACK_STEP)]
+            if len(cur) * TRACK_STEP >= 3 and len(ahead) * TRACK_STEP >= 3:
+                x_cur, _ = centre(sum(c for _, c in cur))
+                x_new, share = centre(sum(c for _, c in ahead))
+                if abs(x_new - x_cur) > crop_frac * 0.6 and share > crop_frac * 1.8:
+                    segs.append(cur)
+                    cur = []
+        if cur:
+            segs.append(cur)
+        for seg in segs:
+            x, _ = centre(sum(c for _, c in seg))
+            if vision_model:  # a model that sees the picture knows the plate from the arm filling it
+                if should_cancel():
+                    raise Cancelled()
+                t_mid = start + (seg[0][0] + seg[-1][0]) / 2
+                seen = _vision_box(src, t_mid, vision_model, bars, log, x)
+                if seen:
+                    lo, hi, thing, _ = seen
+                    # a thing wider than the frame (the car being washed): stay on it, but on its busy end
+                    x = (lo + hi) / 2 if hi - lo <= crop_frac else min(max(x, lo + crop_frac / 2), hi - crop_frac / 2)
+                    if log:
+                        log(f"  {_fmt(t_mid)}: framing on {thing}")
+            x = min(max(x, crop_frac / 2), 1 - crop_frac / 2)
+            t0 = a if seg is segs[0] else seg[0][0]
+            if keys and abs(x - keys[-1][1]) < crop_frac * 0.25:
+                continue  # about the same framing: no jump for nothing
+            if keys:
+                keys.append((max(t0 - 0.01, keys[-1][0]), keys[-1][1]))  # hold, then jump: no pan
+            keys.append((t0, x))
+    return keys or [(0.0, 0.5)]
 
 
 def camera_path(samples, cuts, crop_frac, deadzone=0.07, follow=0.25):

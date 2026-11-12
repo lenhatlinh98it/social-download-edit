@@ -79,7 +79,9 @@ async function scLoadState() {
   if (res.ollama === null) llm = `<span class="bad">Ollama is not running</span> — install it from ollama.com, or moments are picked with heuristics.`;
   else if (!res.ollama.some((m) => m === model || m.split(":")[0] === model)) llm = `<span class="bad">Ollama has no “${esc(model)}”</span> — run <span class="mono">ollama pull ${esc(model)}</span>.`;
   else llm = `<span class="ok">Ollama ready</span> with ${esc(model)}.`;
-  $("#scAi").innerHTML = `${gpu}<br>${llm}<br>Models are downloaded on first use.`;
+  const vision = res.ollama?.includes(res.visionModel) ? `<span class="ok">Follow action</span> frames each shot with ${esc(res.visionModel)}.`
+    : `Follow action uses movement only — run <span class="mono">ollama pull ${esc(res.visionModel)}</span> to frame what is being worked on.`;
+  $("#scAi").innerHTML = `${gpu}<br>${llm}<br>${vision}<br>Models are downloaded on first use.`;
   renderSc();
 }
 

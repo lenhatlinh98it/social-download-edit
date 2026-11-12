@@ -1768,7 +1768,7 @@ class Api:
             return {"ok": False, "error": "Not available in this edition."}
         opts = {**smartcut.defaults(), **(load_settings().get("smartCut") or {})}
         return {"ok": True, "opts": opts, "whisperModels": list(smartcut.WHISPER_MODELS),
-                "ollama": smartcut.ollama_models(), "cuda": smartcut.cuda_devices()}
+                "ollama": smartcut.ollama_models(), "cuda": smartcut.cuda_devices(), "visionModel": smartcut.VISION_MODEL}
 
     def smartcut_start(self, path, opts):
         """`path`: a video file, or a YouTube / Douyin link that is downloaded first."""
@@ -1786,7 +1786,7 @@ class Api:
         opts["target"] = min(max(float(opts["target"]), 20), 180)
         if opts["whisper"] not in (*smartcut.WHISPER_MODELS, "off"):
             opts["whisper"] = "small"
-        if opts["reframe"] not in ("face", "center", "fit"):
+        if opts["reframe"] not in ("face", "action", "center", "fit"):
             opts["reframe"] = "face"
         if opts["subPos"] not in smartcut.SUB_POSITIONS:
             opts["subPos"] = "bottom"
@@ -1899,7 +1899,13 @@ class Api:
             else:
                 bars = None
             pic_w, pic_h = (bars[0], bars[1]) if bars else (info["width"], info["height"])
-            yunet = None
+            yunet = vision = None
+            if opts["reframe"] == "action" and pic_w / pic_h > 9 / 16:
+                if smartcut.VISION_MODEL in (smartcut.ollama_models() or []):
+                    vision = smartcut.VISION_MODEL
+                    log(f"Follow action: {vision} picks what to frame in each shot")
+                else:
+                    log(f"Follow action: movement only (for better framing run: ollama pull {smartcut.VISION_MODEL})")
             if opts["reframe"] == "face" and pic_w / pic_h > 9 / 16:
                 progress("Getting the face detector…", 0.62)
                 yunet = smartcut.ensure_yunet(os.path.join(facebook.DATA_DIR, "models"))
@@ -1914,12 +1920,16 @@ class Api:
                 base = 0.62 + i * span
                 start, end = m["start"], m["end"]
                 keys_list = [[(0.0, 0.5)] for _ in m["parts"]]
-                if yunet:
-                    progress(f"Clip {i + 1}/{len(moments)}: following faces…", base)
+                if yunet or (opts["reframe"] == "action" and pic_w / pic_h > 9 / 16):
+                    progress(f"Clip {i + 1}/{len(moments)}: " + ("following faces…" if yunet else "following the action…"), base)
                     for k, (a, b) in enumerate(m["parts"]):
-                        samples = smartcut.track_faces(path, a, b, yunet, cancel, bars)
                         cuts = [c - a for c in data["cuts"] if a < c < b]
-                        keys_list[k] = smartcut.camera_path(samples, cuts, (pic_h * 9 / 16) / pic_w)
+                        if yunet:
+                            samples = smartcut.track_faces(path, a, b, yunet, cancel, bars)
+                            keys_list[k] = smartcut.camera_path(samples, cuts, (pic_h * 9 / 16) / pic_w)
+                        else:  # one still framing per shot, centred on the work
+                            keys_list[k] = smartcut.action_path(path, a, b, (pic_h * 9 / 16) / pic_w, cuts, cancel, bars,
+                                                                vision, log)
                 subs = None
                 tmp_subs = os.path.join(folder, f".clip{i + 1}.ass")
                 label = f"Part {m['part']}/{m['of']}" if m.get("part") and opts["partLabel"] and m["of"] > 1 else ""
