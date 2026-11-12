@@ -1773,6 +1773,8 @@ class Api:
         if not smartcut:
             return {"ok": False, "error": "Not available in this edition."}
         opts = {**smartcut.defaults(), **(load_settings().get("smartCut") or {})}
+        if opts["llmModel"] == smartcut.OLD_DEFAULT_LLM:  # saved before the default changed, not picked by hand
+            opts["llmModel"] = smartcut.DEFAULT_LLM
         return {"ok": True, "opts": opts, "whisperModels": list(smartcut.WHISPER_MODELS),
                 "ollama": smartcut.ollama_models(), "cuda": smartcut.cuda_devices(), "visionModel": smartcut.VISION_MODEL}
 

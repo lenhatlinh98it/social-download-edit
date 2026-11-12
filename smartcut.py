@@ -24,7 +24,8 @@ import wave
 import editor
 
 OLLAMA_URL = "http://127.0.0.1:11434"
-DEFAULT_LLM = "qwen2.5:7b"
+DEFAULT_LLM = "qwen2.5vl:3b"  # the same model as Follow action: one download does both jobs
+OLD_DEFAULT_LLM = "qwen2.5:7b"
 WHISPER_MODELS = ("small", "medium", "large-v3-turbo")
 YUNET_FILE = "face_detection_yunet_2023mar.onnx"
 YUNET_URL = f"https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/{YUNET_FILE}"
