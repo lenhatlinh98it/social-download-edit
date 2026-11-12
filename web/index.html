@@ -438,6 +438,7 @@
             </div>
             <div class="ed-group">
               <div class="ed-title">Text</div>
+              <div class="chips" id="txtTabs" hidden></div>
               <textarea id="txtContent" rows="2" placeholder="Add a caption or watermark text…" spellcheck="false"></textarea>
               <select id="txtFont"></select>
               <div class="sliders">
@@ -455,22 +456,27 @@
                 <input type="range" id="txtBoxOpacity" min="0" max="100" step="5" value="50"><b class="mono" id="txtBoxOpacityVal">50%</b>
               </div>
               <div class="pos-row"><span>Position</span><div class="pos-grid" data-target="text"></div><span class="ed-hint">or drag it on the output</span></div>
+              <div class="ed-actions">
+                <button class="btn ghost sm" id="txtAdd" title="Add another text (title, channel name, footer…)">+ Add text</button>
+                <button class="btn ghost sm" id="txtRemove">Remove this text</button>
+              </div>
             </div>
             <div class="ed-group">
-              <div class="ed-title">Logo</div>
+              <div class="ed-title">Images</div>
+              <div class="chips" id="imgTabs" hidden></div>
               <div class="music-box" id="logoBox">
                 <div class="music-head">
                   <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
                   <span class="music-name" id="logoName">No logo</span>
-                  <button class="icon-btn" id="logoRemove" title="Remove logo"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+                  <button class="icon-btn" id="logoRemove" title="Remove this image"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
                 </div>
-                <button class="btn ghost sm" id="logoAdd">Add logo (png, jpg, webp)</button>
+                <button class="btn ghost sm" id="logoAdd" title="A logo, a banner, a background for the top or bottom…">+ Add image (png, jpg, webp)</button>
                 <div class="music-ctl">
                   <div class="sliders">
-                    <div class="slider-row"><span>Size</span><input type="range" id="logoSize" min="5" max="60" step="1" value="20"><b class="mono" id="logoSizeVal">20%</b></div>
+                    <div class="slider-row"><span>Size</span><input type="range" id="logoSize" min="5" max="100" step="1" value="40"><b class="mono" id="logoSizeVal">40%</b></div>
                     <div class="slider-row"><span>Opacity</span><input type="range" id="logoOpacity" min="5" max="100" step="5" value="100"><b class="mono" id="logoOpacityVal">100%</b></div>
                   </div>
-                  <div class="pos-row"><span>Position</span><div class="pos-grid" data-target="logo"></div></div>
+                  <div class="pos-row"><span>Position</span><div class="pos-grid" data-target="image"></div><span class="ed-hint">or drag it on the output</span></div>
                 </div>
               </div>
             </div>
