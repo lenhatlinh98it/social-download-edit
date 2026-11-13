@@ -36,6 +36,11 @@ try:  # owner edition only (local AI: faster-whisper, OpenCV, Ollama)
     import smartcut
 except ImportError:
     smartcut = None
+try:  # owner edition only (OpenCV; drives Google Flow / AI Studio in a Chrome profile)
+    import labs
+    import story
+except ImportError:
+    labs = story = None
 try:  # owner edition only (needs the cryptography package)
     import sync
 except ImportError:
@@ -67,7 +72,8 @@ LOG_EVENTS = {"list", "done", "editDone", "batchDone", "queueDone", "stripDone",
               "dyLoginRequired", "igLoginRequired"}
 TASK_SOURCES = {"_fetch_task": "fetch", "_download_task": "download", "_export_task": "editor", "_batch_task": "editor",
                 "_merge_task": "editor", "_strip_task": "editor", "_export_many_task": "editor",
-                "_tt_post_task": "tiktok", "_tt_post_many_task": "tiktok", "_smartcut_task": "smartcut"}
+                "_tt_post_task": "tiktok", "_tt_post_many_task": "tiktok", "_smartcut_task": "smartcut",
+                "_story_character_task": "story", "_story_plan_task": "story", "_story_render_task": "story"}
 DROP_KINDS = {**dict.fromkeys((".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"), "video"),
               **dict.fromkeys((".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"), "audio"),
               **dict.fromkeys((".png", ".jpg", ".jpeg", ".webp"), "image")}
@@ -1982,6 +1988,282 @@ class Api:
         self._notify("Smart cut finished", f"{len(clips)} clips from {name}")
 
     # ---------- notifications & drag-drop ----------
+    # ---------- story video (owner edition) ----------
+    STORY_DEFAULTS = {"profile": "", "voice": "Knox", "voiceStyle": "Energetic, charismatic young storyteller. "
+                      "Conversational and playful, punchy pacing with short dramatic pauses between lines.",
+                      "artStyle": "", "music": "none", "musicPrompt": "Instrumental only, no vocals. Warm, upbeat, "
+                      "motivational background music for a storytelling video, building toward a triumphant ending. "
+                      "Clean mix, smooth highs.", "musicFile": "", "captions": True, "counter": True,
+                      "removeMark": True, "hires": True, "character": ""}
+
+    def _story_root(self):
+        return os.path.join(load_settings().get("dir") or DEFAULT_DIR, "Story video")
+
+    def _story_characters(self):
+        folder = os.path.join(self._story_root(), "Characters")
+        out = []
+        if os.path.isdir(folder):
+            for slug in sorted(os.listdir(folder)):
+                meta = os.path.join(folder, slug, "character.json")
+                if not os.path.isfile(meta):
+                    continue
+                try:
+                    with open(meta, encoding="utf-8") as f:
+                        c = json.load(f)
+                except (OSError, ValueError):
+                    continue
+                shown = os.path.join(folder, slug, c.get("shown") or c.get("sheet") or "")
+                out.append({"slug": slug, "name": c.get("name") or slug, "description": c.get("description") or "",
+                            "style": c.get("style") or "", "url": self._media.url_for(shown) if os.path.isfile(shown) else ""})
+        return out
+
+    def _story_character(self, slug):
+        folder = os.path.join(self._story_root(), "Characters", slug)
+        with open(os.path.join(folder, "character.json"), encoding="utf-8") as f:
+            return folder, json.load(f)
+
+    def _story_save_character(self, name, description, style, image):
+        """Keep a character: its sheet (as made) plus a copy without the corner mark for the screen."""
+        slug = safe_name(name, fallback="character", limit=60)
+        folder = os.path.join(self._story_root(), "Characters", slug)
+        os.makedirs(folder, exist_ok=True)
+        ext = os.path.splitext(image)[1].lower() or ".jpg"
+        sheet = os.path.join(folder, "sheet" + ext)
+        if os.path.abspath(image) != os.path.abspath(sheet):
+            shutil.copyfile(image, sheet)
+        story.clean_file(sheet, os.path.join(folder, "sheet_clean.jpg"))
+        with open(os.path.join(folder, "character.json"), "w", encoding="utf-8") as f:
+            json.dump({"name": name, "description": description, "style": style, "sheet": os.path.basename(sheet),
+                       "shown": "sheet_clean.jpg"}, f, ensure_ascii=False, indent=1)
+        return slug
+
+    def story_state(self):
+        if not story:
+            return {"ok": False, "error": "Not available in this edition."}
+        s = load_settings()
+        root = s.get("ttChromeRoot") or ""
+        try:
+            profiles = [{"dir": p["dir"], "name": p["name"]} for p in tiktok.list_profiles(root)] if root else []
+        except (OSError, ValueError, tiktok.PostError):
+            profiles = []
+        return {"ok": True, "opts": {**self.STORY_DEFAULTS, **(s.get("story") or {})}, "profiles": profiles,
+                "chromeRoot": bool(root), "characters": self._story_characters(), "gemini": bool(s.get("geminiApiKey")),
+                "ollama": smartcut.ollama_models() if smartcut else None, "folder": self._story_root()}
+
+    def story_save(self, opts):
+        save_setting("story", {**self.STORY_DEFAULTS, **{k: v for k, v in (opts or {}).items() if k in self.STORY_DEFAULTS}})
+        return {"ok": True}
+
+    def story_character_file(self, name, description, style):
+        """Use a picture you already have as the character sheet."""
+        if not story:
+            return {"ok": False, "error": "Not available in this edition."}
+        if not (name or "").strip():
+            return {"ok": False, "error": "Give the character a name first."}
+        picked = self._window.create_file_dialog(
+            webview.FileDialog.OPEN, file_types=("Images (*.png;*.jpg;*.jpeg;*.webp)", "All files (*.*)"))
+        if not picked:
+            return {"ok": False, "cancelled": True}
+        slug = self._story_save_character(name.strip(), (description or "").strip(), (style or "").strip(), picked[0])
+        return {"ok": True, "slug": slug, "characters": self._story_characters()}
+
+    def _story_profile(self, opts):
+        root = load_settings().get("ttChromeRoot") or ""
+        if not root:
+            raise RuntimeError("Choose the Google Chrome Portable folder in the TikTok tab first.")
+        if not opts.get("profile"):
+            raise RuntimeError("Choose the Chrome profile that is signed in to Google (Flow, AI Studio).")
+        return root, opts["profile"]
+
+    def story_make_character(self, name, description, style, opts):
+        if not story:
+            return {"ok": False, "error": "Not available in this edition."}
+        if not (name or "").strip() or not (description or "").strip():
+            return {"ok": False, "error": "Write the character's name and description first."}
+        opts = {**self.STORY_DEFAULTS, **(opts or {})}
+        self.story_save(opts)
+        try:
+            self._story_profile(opts)
+        except RuntimeError as ex:
+            return {"ok": False, "error": str(ex)}
+        if not self._run(self._story_character_task, name.strip(), description.strip(), (style or "").strip(), opts):
+            return {"ok": False, "error": "Another task is running."}
+        return {"ok": True}
+
+    def _story_logger(self, source_name):
+        def progress(text, value=None):
+            self._emit("stProgress", text=text, value=value)
+
+        def log(message):
+            self._log("info", "story", f"{source_name}: {message}")
+            self._emit("stLog", message=message)
+        return progress, log
+
+    def _story_character_task(self, name, description, style, opts):
+        self._edit_cancel.clear()
+        progress, log = self._story_logger(name)
+        root, profile = self._story_profile(opts)
+        tmp = os.path.join(self._story_root(), "Characters", safe_name(name, fallback="character", limit=60), "sheet.jpg")
+        progress("Drawing the character in Flow…", None)
+        shots = os.path.join(facebook.DATA_DIR, "story_shots")
+        with labs.Session(root, profile, shots, log, self._edit_cancel.is_set) as s:
+            _, failed = s.flow_pictures([(story.character_prompt(description, style or story.DEFAULT_STYLE), tmp)],
+                                        refs=[], ratio="16:9", hires=opts.get("hires", True))
+        if failed:
+            raise RuntimeError("Flow could not draw the character - try again or change the description.")
+        slug = self._story_save_character(name, description, style, tmp)
+        log("Character sheet saved")
+        self._emit("stCharacter", slug=slug, characters=self._story_characters())
+
+    def story_plan(self, script, slug, counter=True):
+        if not story:
+            return {"ok": False, "error": "Not available in this edition."}
+        if len((script or "").split()) < 5:
+            return {"ok": False, "error": "Write the script first (the narration, word for word)."}
+        if not slug:
+            return {"ok": False, "error": "Choose or make the main character first (step 1)."}
+        if not self._run(self._story_plan_task, script.strip(), slug, bool(counter)):
+            return {"ok": False, "error": "Another task is running."}
+        return {"ok": True}
+
+    def _story_plan_task(self, script, slug, counter):
+        progress, log = self._story_logger("plan")
+        _, char = self._story_character(slug)
+        progress("Splitting the script into scenes…", None)
+        key = load_settings().get("geminiApiKey") or ""
+        local = smartcut.DEFAULT_LLM if smartcut and smartcut.DEFAULT_LLM in (smartcut.ollama_models() or []) else ""
+        scenes, engine_name = story.plan_scenes(script, char, key, local, counter, log)
+        log(f"{len(scenes)} scenes planned with {engine_name}")
+        self._emit("stScenes", scenes=scenes, engine=engine_name)
+
+    def story_render(self, title, slug, scenes, opts):
+        if not story:
+            return {"ok": False, "error": "Not available in this edition."}
+        title = (title or "").strip() or "Story"
+        scenes = [s for s in (scenes or []) if (s.get("text") or "").strip()]
+        if not scenes:
+            return {"ok": False, "error": "Plan the scenes first (step 2)."}
+        if not slug:
+            return {"ok": False, "error": "Choose the main character first (step 1)."}
+        opts = {**self.STORY_DEFAULTS, **(opts or {})}
+        self.story_save(opts)
+        if opts["music"] == "file" and not os.path.isfile(opts.get("musicFile") or ""):
+            return {"ok": False, "error": "Choose the music file, or pick another music option."}
+        try:
+            self._story_profile(opts)
+        except RuntimeError as ex:
+            return {"ok": False, "error": str(ex)}
+        if not self._run(self._story_render_task, title, slug, scenes, opts):
+            return {"ok": False, "error": "Another task is running."}
+        return {"ok": True}
+
+    def story_pick_music(self):
+        picked = self._window.create_file_dialog(
+            webview.FileDialog.OPEN, file_types=("Audio files (*.mp3;*.m4a;*.aac;*.wav;*.ogg;*.flac)", "All files (*.*)"))
+        return {"ok": True, "path": picked[0]} if picked else {"ok": False, "cancelled": True}
+
+    def _story_render_task(self, title, slug, scenes, opts):
+        ffmpeg, ffprobe = self._tools()
+        self._edit_cancel.clear()
+        cancel = self._edit_cancel.is_set
+        progress, log = self._story_logger(title)
+        root, profile = self._story_profile(opts)
+        char_dir, char = self._story_character(slug)
+        sheet = os.path.join(char_dir, char["sheet"])
+        style = char.get("style") or opts.get("artStyle") or story.DEFAULT_STYLE
+        folder = os.path.join(self._story_root(), safe_name(title, fallback="Story", limit=80))
+        os.makedirs(os.path.join(folder, "images", "original"), exist_ok=True)
+        pj = os.path.join(folder, "project.json")
+        old = {}
+        if os.path.isfile(pj):
+            try:
+                with open(pj, encoding="utf-8") as f:
+                    old = json.load(f)
+            except (OSError, ValueError):
+                old = {}
+        old_prompts = {s.get("prompt"): s.get("original") for s in old.get("scenes") or []}
+        narration = " ".join(s["text"].strip() for s in scenes)
+        voice = os.path.join(folder, "voice.wav")
+        need_voice = not os.path.isfile(voice) or old.get("narration") != narration or old.get("voiceName") != opts["voice"]
+
+        jobs = []
+        for i, s in enumerate(scenes):
+            s["prompt"] = story.scene_prompt(s, char, style)
+            reuse = old_prompts.get(s["prompt"])
+            if reuse and os.path.isfile(os.path.join(folder, reuse)):  # same picture asked as last time: keep it
+                s["original"] = reuse
+                continue
+            s["original"] = os.path.join("images", "original", f"{i + 1:03d}.jpg")
+            jobs.append((s["prompt"], os.path.join(folder, s["original"])))
+        music = None
+        if opts["music"] == "file":
+            music = "music" + os.path.splitext(opts["musicFile"])[1].lower()
+            shutil.copyfile(opts["musicFile"], os.path.join(folder, music))
+        elif opts["music"] == "flow":
+            music = "music.wav"
+        need_music = opts["music"] == "flow" and (not os.path.isfile(os.path.join(folder, music))
+                                                  or old.get("musicPrompt") != opts["musicPrompt"])
+        project = {"title": title, "character": slug, "narration": narration, "voice": "voice.wav", "voiceName": opts["voice"],
+                   "music": music, "musicPrompt": opts["musicPrompt"], "flowProject": old.get("flowProject"),
+                   "options": {"captions": bool(opts["captions"]), "musicVolume": 0.22}, "scenes": scenes}
+
+        def save():
+            with open(pj, "w", encoding="utf-8") as f:
+                json.dump(project, f, ensure_ascii=False, indent=1)
+        save()
+
+        if need_voice or need_music or jobs:
+            shots = os.path.join(facebook.DATA_DIR, "story_shots")
+            with labs.Session(root, profile, shots, log, cancel) as s:
+                if need_voice:
+                    parts = []
+                    chunks = story.narration_chunks(scenes)
+                    for k, text in enumerate(chunks):
+                        progress(f"Narrating in AI Studio ({k + 1}/{len(chunks)})…", 0.02 + 0.08 * k / len(chunks))
+                        parts.append(s.tts(text, os.path.join(folder, f"voice_part{k + 1}.wav"), opts["voice"], opts["voiceStyle"]))
+                    story.join_audio(ffmpeg, parts, voice)
+                    for part in parts:
+                        os.remove(part)
+                    log(f"Narration ready: {story.audio_length(ffprobe, voice):.1f} s")
+                if need_music:
+                    progress("Making the background music in Flow Music…", 0.11)
+                    s.music(opts["musicPrompt"], os.path.join(folder, music))
+                if jobs:
+                    total_jobs = len(jobs)
+                    done = [0]
+
+                    def picture(_p, _d):
+                        done[0] += 1
+                        progress(f"Pictures {done[0]}/{total_jobs}…", 0.15 + 0.55 * done[0] / total_jobs)
+                    progress(f"Drawing {total_jobs} pictures in Flow…", 0.15)
+                    project["flowProject"], failed = s.flow_pictures(jobs, [sheet], project.get("flowProject"),
+                                                                     hires=opts.get("hires", True), on_picture=picture)
+                    save()
+                    if failed:
+                        log(f"{len(failed)} picture(s) failed - trying them once more")
+                        _, failed = s.flow_pictures(failed, [sheet], project["flowProject"], hires=opts.get("hires", True),
+                                                    on_picture=picture)
+                    if failed:
+                        raise RuntimeError(f"Flow could not draw {len(failed)} scene(s). Change their description and "
+                                           "render again - the finished pictures are kept.")
+        progress("Removing the corner mark…" if opts["removeMark"] else "Preparing the pictures…", 0.72)
+        for s in scenes:
+            if opts["removeMark"]:
+                s["image"] = os.path.join("images", "clean", os.path.basename(s["original"]))
+                story.clean_file(os.path.join(folder, s["original"]), os.path.join(folder, s["image"]))
+            else:
+                s["image"] = s["original"]
+        save()
+        progress("Timing the scenes on the narration…", 0.74)
+        segs, _ = smartcut.transcribe(voice, "small", os.path.join(facebook.DATA_DIR, "models"), None,
+                                      lambda _v: None, cancel, log)
+        words = [(w["start"], w["end"], w["word"]) for seg in segs for w in seg["words"]]
+        dst = editor.unique_output(folder, safe_name(title, fallback="Story", limit=100))
+        res = story.render(ffmpeg, ffprobe, folder, words, dst, lambda v: progress("Rendering…", 0.76 + 0.24 * v), cancel, log)
+        self._emit("stDone", path=dst, name=os.path.basename(dst), duration=res["duration"], folder=folder, title=title)
+        self._log("success", "story", f"{title}: {res['duration']:.0f} s video made", dst)
+        self._notify("Story video finished", f"{title} ({res['duration']:.0f} s)")
+
     def _notify(self, title, message):
         try:
             if self._notifier:
