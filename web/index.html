@@ -294,7 +294,7 @@
       <section class="view" id="view-editor" data-mode="edit">
         <div class="ed-bar glass">
           <div class="seg ed-modes" id="edModes">
-            <button data-m="edit" class="on">Edit</button><button data-m="batch">Batch</button><button data-m="merge">Merge</button><button data-m="smartcut" class="owner-only">Smart cut</button>
+            <button data-m="edit" class="on">Edit</button><button data-m="batch">Batch</button><button data-m="merge">Merge</button><button data-m="smartcut" class="owner-only">Smart cut</button><button data-m="story" class="owner-only">Story</button>
           </div>
           <button class="btn primary sm edit-only" id="edOpen">
             <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -693,6 +693,81 @@
             </div>
           </aside>
         </div>
+
+        <div class="ed-body st-only owner-only">
+          <div class="ed-stage glass list-stage st-stage">
+            <div class="st-card">
+              <div class="list-head"><b>1 · Main character</b><div class="ed-spacer"></div>
+                <select id="stChar" class="st-char-select"></select></div>
+              <div class="st-char">
+                <img id="stCharImg" alt="" hidden>
+                <div class="st-char-new">
+                  <input id="stCharName" placeholder="Name, e.g. Tom" spellcheck="false">
+                  <textarea id="stCharDesc" rows="2" placeholder="Looks: a young man with messy brown hair, orange outdoor vest over a white t-shirt, dark blue jeans, brown boots"></textarea>
+                  <input id="stCharStyle" placeholder="Art style (optional) — default: 2D hand-drawn cartoon, bold outlines, flat colors" spellcheck="false">
+                  <div class="ed-actions">
+                    <button class="btn primary sm" id="stCharMake" title="Draws a sheet of the character (front, 3/4, side, back) in Google Flow">Draw in Flow</button>
+                    <button class="btn ghost sm" id="stCharFile" title="Use a character sheet you already have">Use a picture…</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="st-card st-grow">
+              <div class="list-head"><b>2 · Script</b><div class="ed-spacer"></div><span class="muted" id="stEngine"></span></div>
+              <input id="stTitle" placeholder="Title of the video, e.g. 100 Days to Level Up" spellcheck="false">
+              <textarea id="stScript" rows="5" placeholder="Paste the narration, word for word. It is read by the AI voice and split into scenes — one picture per 1-2 sentences."></textarea>
+              <div class="ed-actions st-plan-row">
+                <label class="ed-check"><input type="checkbox" id="stCounter" checked> Counter (DAY / LV + bar) when the story counts days</label>
+                <button class="btn primary sm" id="stPlan">Split into scenes</button>
+              </div>
+              <div class="file-list" id="stScenes"></div>
+            </div>
+            <div class="sc-log mono" id="stLog"></div>
+          </div>
+          <aside class="ed-side glass">
+            <div class="ed-group">
+              <div class="ed-title">Google account</div>
+              <label class="ed-field">Chrome profile signed in to Google<select id="stProfile"></select></label>
+              <div class="muted st-hint">Flow, AI Studio and Flow Music run in this profile (Chrome Portable, set in the TikTok tab). Sign in to them once in it.</div>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Voice (AI Studio)</div>
+              <label class="ed-field">Voice<input id="stVoice" list="stVoices" spellcheck="false"></label>
+              <datalist id="stVoices"><option value="Knox"><option value="Enzo"><option value="Arlo"><option value="Finn"><option value="Gero">
+                <option value="Koda"><option value="Daro"><option value="Elio"><option value="Fola"><option value="Nika"><option value="Lumi"></datalist>
+              <label class="ed-field">How it reads<textarea id="stVoiceStyle" rows="3"></textarea></label>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Music</div>
+              <div class="chips" id="stMusic"><button data-v="none" class="on">None</button><button data-v="flow">Make in Flow Music</button><button data-v="file">My file</button></div>
+              <textarea id="stMusicPrompt" rows="3"></textarea>
+              <button class="btn ghost sm" id="stMusicPick">Choose music file…</button>
+              <span class="muted mono st-hint" id="stMusicName"></span>
+            </div>
+            <div class="ed-group">
+              <div class="ed-title">Video</div>
+              <label class="ed-check"><input type="checkbox" id="stCaptions" checked> Captions — words light up as they are spoken</label>
+              <label class="ed-check"><input type="checkbox" id="stRemoveMark" checked> Remove the corner mark of the AI pictures</label>
+              <label class="ed-check"><input type="checkbox" id="stHires" checked> 2K pictures (sharper, slower)</label>
+              <div class="muted st-hint">Turn on TikTok's “AI-generated content” label when you post these videos.</div>
+            </div>
+            <div class="ed-group">
+              <div class="track" id="stTrack"><div class="fill" id="stFill"></div></div>
+              <div class="ed-status" id="stStatus">Ready</div>
+              <div class="ed-actions">
+                <button class="btn primary" id="stStart">3 · Render video</button>
+                <button class="btn danger hidden" id="stCancel">Cancel</button>
+              </div>
+              <div class="ed-done" id="stDone" hidden>
+                <div class="ed-actions">
+                  <button class="btn primary sm" id="stEdit">Open in Editor</button>
+                  <button class="btn ghost sm" id="stPost">Post to TikTok</button>
+                  <button class="btn ghost sm" id="stShow">Show file</button>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
       </section>
     </main>
 
@@ -896,6 +971,7 @@
   <script src="keys.js"></script>
   <script src="accounts.js"></script>
   <script src="smartcut.js"></script>
+  <script src="story.js"></script>
   <script src="sync.js"></script>
 </body>
 </html>

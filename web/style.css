@@ -577,9 +577,10 @@ input[type="color"] { width: 34px; height: 30px; padding: 2px; border-radius: 8p
 .music-box:not(.on) .music-head .icon-btn, .music-box:not(.on) .music-ctl, .music-box.on > .btn { display: none; }
 
 /* editor modes: Edit / Batch / Merge */
-.batch-only, .merge-only, .sc-only { display: none !important; }
+.batch-only, .merge-only, .sc-only, .st-only { display: none !important; }
 #view-editor[data-mode="batch"] .batch-only, #view-editor[data-mode="merge"] .merge-only,
 #view-editor[data-mode="smartcut"] .sc-only { display: grid !important; }
+#view-editor[data-mode="story"] .st-only { display: grid !important; }
 #view-editor:not([data-mode="edit"]) .edit-only { display: none !important; }
 .ed-modes { flex: none; }
 .ed-spacer { flex: 1; }
@@ -724,3 +725,26 @@ select:focus, textarea:focus { border-color: rgba(139,92,246,.7); box-shadow: 0 
 #scDone .ed-actions { flex-wrap: wrap; }
 #scDone .btn.sm { flex: 1 1 100%; }
 .sc-reason { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---------- story video ---------- */
+.st-stage { overflow-y: auto; }
+.st-card { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--stroke); border-radius: 12px; }
+.st-card.st-grow { flex: none; }
+.st-card .file-list { flex: none; min-height: auto; overflow: visible; padding-right: 0; }
+.st-stage > .st-card, .st-stage > .sc-log { flex: none; }
+.st-card input { height: 36px; font-size: 12.5px; }
+.st-char-select { width: 220px; height: 32px; }
+.st-char { display: flex; gap: 12px; align-items: flex-start; }
+.st-char img { width: 300px; max-width: 45%; border-radius: 10px; background: #fff; object-fit: contain; }
+.st-char-new { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.st-char-new .btn.sm { width: auto; }
+.st-plan-row { justify-content: space-between; align-items: center; }
+.st-plan-row .btn.sm { width: auto; flex: none; }
+.st-hint { font-size: 11.5px; line-height: 1.4; }
+.st-scene { display: grid; grid-template-columns: 28px 1fr 1fr 150px 28px; gap: 8px; align-items: start; padding: 8px;
+  border: 1px solid var(--stroke); border-radius: 10px; background: rgba(0,0,0,.12); }
+.st-scene textarea { min-height: 62px; font-size: 12px; }
+.st-scene .st-extra { display: flex; flex-direction: column; gap: 4px; }
+.st-scene .st-extra input, .st-scene .st-extra select { height: 28px; font-size: 11.5px; padding: 0 8px; }
+.st-scene .st-extra .st-hud { display: grid; grid-template-columns: 1fr 1fr 44px; gap: 4px; }
+.st-scene .fidx { padding-top: 6px; }
