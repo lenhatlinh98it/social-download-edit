@@ -8,6 +8,8 @@ The web apps change: every step raises LabsError with what it was doing, and a s
 import difflib
 import os
 import re
+import shutil
+import tempfile
 import time
 
 from playwright.sync_api import Error as PlaywrightError
@@ -36,6 +38,7 @@ class Session:
         self.root, self.profile_dir, self.shots_dir = root, profile_dir, shots_dir
         self.log, self.should_cancel = log, should_cancel
         self._pw = self.browser = self.page = None
+        self._project_url = None
 
     def __enter__(self):
         self._pw = sync_playwright().start()
@@ -167,18 +170,24 @@ class Session:
 
     def download(self, click, dst, timeout=120000):
         """Run `click` and save the file it downloads to `dst`."""
-        with self.page.expect_download(timeout=timeout) as info:
-            click()
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        dl = info.value
-        problem = dl.failure()  # waits for the download to finish
-        if not problem:
-            dl.save_as(dst)
-        if problem or not os.path.isfile(dst) or os.path.getsize(dst) == 0:
+        problem = ""
+        for attempt in range(2):
+            # an empty first file can come before the real one (Flow prepares 2K pictures after the click):
+            # then wait for the next download instead of clicking again
+            with self.page.expect_download(timeout=timeout if attempt == 0 else 90000) as info:
+                if attempt == 0:
+                    click()
+            dl = info.value
+            problem = dl.failure() or ""  # waits for the download to finish
+            if not problem:
+                dl.save_as(dst)
+                if os.path.isfile(dst) and os.path.getsize(dst) > 0:
+                    return dst
+                problem = "empty file"
             if os.path.isfile(dst):
                 os.remove(dst)
-            raise LabsError(f"The download of {os.path.basename(dst)} failed ({problem or 'empty file'}).")
-        return dst
+        raise LabsError(f"The download of {os.path.basename(dst)} failed ({problem}).")
 
     # ---------- Flow: pictures ----------
     def flow_open(self, project_url=None):
@@ -200,7 +209,8 @@ class Session:
             self.wait(1500)
             self.dismiss_intros()
             self._direct_mode()
-            return self.page.url.split("?")[0]
+            self._project_url = self.page.url.split("?")[0]
+            return self._project_url
         except LabsError:
             raise
         except (PlaywrightError, PlaywrightTimeout) as ex:
@@ -258,15 +268,113 @@ class Session:
         except (PlaywrightError, PlaywrightTimeout) as ex:
             raise self.fail("Choosing the picture settings in Flow", ex) from None
 
+    @staticmethod
+    def _ref_name(path):
+        """The file name Flow will show for this reference: its folder (the character) and its own name, so two
+        characters' sheets ("sheet.jpg" each) never get mixed up in the project's uploads."""
+        folder = os.path.basename(os.path.dirname(os.path.abspath(path)))
+        return re.sub(r"[^\w.-]+", "_", f"{folder}_{os.path.basename(path)}")
+
+    _UPLOAD_BTN = re.compile(r"Tải nội dung.*lên|Upload", re.I)
+
+    def _picker(self):
+        """Open the reference picker and return it - or None when it did not open (then nothing else on the
+        page is clicked: the project's own "Uploads" link and picture tiles look alike and open the big viewer)."""
+        p = self.page
+        self._add_button().click()
+        pane = p.locator(".cdk-overlay-pane, [role=dialog]").filter(has=p.get_by_role("button", name=self._UPLOAD_BTN))
+        for _ in range(10):
+            self.wait(400)
+            if pane.count() and pane.last.is_visible():
+                return pane.last
+        p.keyboard.press("Escape")
+        return None
+
+    def _pick_uploaded(self, name):
+        """Attach a picture uploaded earlier to this project (picker > Uploads > the file): no upload, no wait."""
+        pane = self._picker()
+        if pane is None:
+            return False
+        # search the file by name over every kind ("Uploads" alone lags behind a fresh upload)
+        every = pane.get_by_role("tab").filter(has_text=re.compile(r"^\s*dashboard", re.I))
+        if every.count():
+            every.first.click()
+        search = pane.locator("input[placeholder*='Tìm' i], input[placeholder*='Search' i]")
+        if search.count():
+            search.first.fill(name)
+        item = pane.get_by_role("option").filter(has_text=name)  # the file name, wherever it sits in the item
+        for _ in range(8):  # a picture uploaded a moment ago can take a few seconds to be listed
+            self.wait(700)
+            if item.count():
+                break
+        if not item.count():
+            self.page.keyboard.press("Escape")
+            self.wait(400)
+            return False
+        item.first.click()
+        # picking it may attach it right away and close the picker; else it waits for "Add to prompt"
+        add = pane.get_by_role("button", name=re.compile(r"Thêm vào câu lệnh|Add to prompt", re.I))
+        for _ in range(10):
+            self.wait(400)
+            if self.page.evaluate(self._BAR_REFS_JS):
+                return True
+            if add.count() and add.first.is_visible() and add.first.is_enabled():
+                add.first.click()
+                self.wait(600)
+                return True
+        return bool(self.page.evaluate(self._BAR_REFS_JS))
+
+    _BAR_REFS_JS = r"""() =>
+        // pictures attached to the prompt bar (they stay there after a prompt is sent)
+        // (the chip elements themselves have no box: measure the picture inside)
+        [...document.querySelectorAll('.ingredient-bar-container img, flow-ingredient-chip img')]
+            .filter(c => c.getBoundingClientRect().width > 0).length"""
+
+    def _back_to_project(self):
+        """Leave a picture's big view (/edit/) for the project grid - with Flow's own back arrow when it is
+        there (no reload: the reference attached to the prompt bar stays), else by opening the project again."""
+        back = self.icon_button("arrow_back")
+        if "/edit/" in self.page.url and back.count() and back.first.is_visible():
+            back.first.click()
+            try:
+                self.page.wait_for_url(lambda u: "/edit/" not in u, timeout=15000)
+                self._prompt_bar().wait_for(timeout=30000)
+                self.wait(800)
+                return
+            except (PlaywrightError, PlaywrightTimeout):
+                pass
+        if "/edit/" in self.page.url and self._project_url:
+            self.log("Flow opened a picture - going back to the project")
+            self.page.goto(self._project_url, wait_until="domcontentloaded", timeout=60000)
+            self._prompt_bar().wait_for(timeout=60000)
+            self.wait(1000)
+        elif "/edit/" in self.page.url:
+            self.page.go_back(wait_until="domcontentloaded")
+            self.wait(1000)
+
     def flow_add_reference(self, path):
-        """Upload a picture and attach it to the prompt as a reference (keeps the character the same)."""
+        """Attach a picture to the prompt as a reference (keeps the character the same). It is uploaded to the
+        project once; after that it is only picked again from the project's uploads."""
+        name = self._ref_name(path)
         try:
-            self._add_button().click()
-            up = self.page.get_by_role("button", name=re.compile(r"Tải nội dung.*lên|Upload", re.I)).first
+            self._back_to_project()
+            if self.page.evaluate(self._BAR_REFS_JS):
+                return  # still attached from the last prompt
+            if self._pick_uploaded(name):
+                return
+            # first time in this project: upload a copy named after the character
+            ref = os.path.join(tempfile.gettempdir(), "grabber-story-refs", name)
+            os.makedirs(os.path.dirname(ref), exist_ok=True)
+            shutil.copyfile(path, ref)
+            pane = self._picker()
+            if pane is None:
+                raise LabsError("Flow's picture picker did not open (the + button next to the prompt).")
+            up = pane.get_by_role("button", name=self._UPLOAD_BTN).first
             up.wait_for(timeout=20000)
             with self.page.expect_file_chooser(timeout=20000) as fc:
                 up.click()
-            fc.value.set_files(os.path.abspath(path))
+            fc.value.set_files(ref)
+            self.log(f"Flow: uploaded the reference {name} (once for this project)")
             self.wait(1500)
             self.wait_for_consent()  # Flow asks once to confirm the rights to an uploaded picture
             add = self.page.get_by_role("button", name=re.compile(r"Thêm vào câu lệnh|Add to prompt", re.I)).first
@@ -278,6 +386,10 @@ class Session:
             raise self.fail("Adding the reference picture in Flow", ex) from None
 
     def _add_button(self):
+        named = self.page.locator("button[aria-label='Thêm thành phần vào ô nhập câu lệnh'], "
+                                  "button[aria-label*='ingredient' i][aria-label*='prompt' i]")
+        if named.count() and named.first.is_visible():
+            return named.first
         box = self._prompt_bar().bounding_box()
         for b in self.icon_button("add").all():
             bb = b.bounding_box()
@@ -288,6 +400,7 @@ class Session:
     def flow_submit(self, prompt):
         """Type a prompt and start it (the references already attached stay for it)."""
         try:
+            self._back_to_project()
             box = self._prompt_bar()
             box.click()
             self.page.keyboard.press("Control+A")
@@ -342,6 +455,7 @@ class Session:
         calm = 0
         while time.time() < end:
             self.check()
+            self._back_to_project()  # a finished picture may have been opened big on its own
             body = self.page.inner_text("body")
             if re.search(r"hoạt động bất thường|unusual activity", body, re.I):
                 raise LabsError("Google Flow refused the pictures: it reports “unusual activity” on this account "
@@ -367,7 +481,7 @@ class Session:
                 item = self.page.get_by_role("menuitem", name=re.compile(size)).first
                 item.wait_for(timeout=10000)
                 return self.download(lambda: item.click(), dst, timeout=180000)
-            except (PlaywrightError, PlaywrightTimeout) as ex:
+            except (PlaywrightError, PlaywrightTimeout, LabsError) as ex:
                 last = ex
                 self.page.keyboard.press("Escape")
                 self.log(f"Flow: {size[1:]} download did not come, trying the next size")
@@ -421,8 +535,8 @@ class Session:
         return {want[k][0] for k in got}
 
     def flow_pictures(self, jobs, refs, project_url=None, ratio="9:16", hires=True, on_picture=lambda *_: None, batch=6):
-        """`jobs`: [(prompt, dst)]. Sends prompts in batches (each with the reference pictures uploaded again,
-        which works the same in every Flow layout), waits, saves the pictures. Returns the project URL and the
+        """`jobs`: [(prompt, dst)]. Sends prompts in batches (the reference pictures are uploaded once, then kept
+        attached or picked again from the project's uploads), waits, saves the pictures. Returns the project URL and the
         jobs that failed (the caller may try them once more)."""
         url = self.flow_open(project_url)
         self.flow_settings(ratio)
@@ -438,9 +552,11 @@ class Session:
             self.flow_wait_idle()
             saved = self.flow_collect(part, hires, on_picture)
             failed += [j for j in part if j[0] not in saved]
-            self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            self._prompt_bar().wait_for(timeout=60000)
-            self.wait(1500)
+            self._back_to_project()  # Flow's back arrow: no reload, the reference stays attached
+            if "/project/" not in self.page.url or "/edit/" in self.page.url:
+                self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                self._prompt_bar().wait_for(timeout=60000)
+                self.wait(1500)
             self._direct_mode()
         return url, failed
 
